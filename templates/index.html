@@ -80,6 +80,32 @@
   .panel button:hover { transform: translateY(-1px); }
   .panel button[disabled] { opacity: 0.55; cursor: progress; transform: none; }
 
+  .control { border: 1px solid var(--line); border-radius: 14px; padding: 1rem 1.1rem; margin: 1.5rem 0 1.25rem; background: var(--raised); }
+  .ctl-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+  .ctl-row + .ctl-row { margin-top: 0.75rem; }
+  .ctl-row input[type=url] { flex: 1 1 22rem; padding: 0.5rem 0.9rem; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); }
+  .ctl-row input[type=number] { padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .ctl-row button { padding: 0.5rem 1.2rem; border: 0; border-radius: 999px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+  :root[data-theme="dark"] .ctl-row button { color: oklch(0.18 0.01 40); }
+  .ctl-row button.ghost { background: none; border: 1px solid var(--line); color: inherit; font-weight: 500; }
+  .ctl-row button.ghost:hover { border-color: var(--accent); }
+  .ctl-note { color: var(--muted); font-size: 0.87rem; }
+  .grow { flex: 1; }
+  .dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--strong-ink); box-shadow: 0 0 0 4px var(--strong-bg); }
+  .dot.busy { background: var(--maybe-ink); box-shadow: 0 0 0 4px var(--maybe-bg); }
+  .dot.err { background: var(--skip-ink); box-shadow: 0 0 0 4px var(--skip-bg); }
+
+  .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1.1rem; }
+  .tabs button { padding: 0.4rem 1rem; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); cursor: pointer; font-size: 0.9rem; }
+  .tabs button.active { background: var(--dark); color: var(--on-dark); border-color: var(--dark); }
+
+  .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.85rem; }
+  .row-actions button { padding: 0.3rem 0.9rem; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); cursor: pointer; font-size: 0.85rem; }
+  .row-actions button:hover { border-color: var(--accent); }
+  .row-actions button.primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+  :root[data-theme="dark"] .row-actions button.primary { color: oklch(0.18 0.01 40); }
+
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
   .summary div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem 0.95rem; }
   .summary b { display: block; font-family: var(--display); font-size: 1.5rem; color: var(--accent-deep); line-height: 1.15; }
@@ -125,26 +151,38 @@
   <header>
     <div>
       <h1>Разведчик вакансий</h1>
-      <p class="tagline">Ищет вакансии, оценивает по моему профилю и объясняет оценку. Отклик не отправляет: решение остаётся за человеком.</p>
+      <p class="tagline">Сам собирает вакансии по расписанию, оценивает по моему профилю и объясняет оценку. Отклик не отправляет: решение остаётся за человеком.</p>
     </div>
     <button class="theme-switch" id="themeToggle" type="button" title="Переключить тему"></button>
   </header>
 
   <div class="banner" id="banner" hidden></div>
 
-  <div class="panel">
-    <input id="query" type="search" placeholder="Свой запрос - или оставь пустым, тогда ищу по резюме">
-    <select id="resume" title="Под какое резюме искать">
-      <option value="support">Сопровождение</option>
-      <option value="python">Python</option>
-      <option value="csharp">C#</option>
-      <option value="all">Все три</option>
-    </select>
-    <select id="source">
-      <option value="demo">Демо-набор</option>
-      <option value="hh">hh.ru</option>
-    </select>
-    <button id="run" type="button">Искать</button>
+  <section class="control">
+    <div class="ctl-row">
+      <span class="dot" id="dot"></span>
+      <b id="stateText">…</b>
+      <span class="ctl-note" id="stateNote"></span>
+      <span class="grow"></span>
+      <button id="btnLogin" type="button" class="ghost">Войти в hh</button>
+      <button id="btnScan" type="button" class="ghost">Собрать сейчас</button>
+      <button id="btnToggle" type="button">Включить скаут</button>
+    </div>
+    <div class="ctl-row">
+      <input id="searchUrl" type="url" placeholder="Ссылка на выдачу hh по резюме">
+      <label class="ctl-note">каждые
+        <input id="interval" type="number" min="15" step="15" style="width:5rem"> мин
+      </label>
+      <button id="btnSave" type="button" class="ghost">Сохранить</button>
+    </div>
+    <div class="banner" id="banner" hidden></div>
+  </section>
+
+  <div class="tabs" id="tabs">
+    <button data-tab="new" class="active">Найдено скаутом</button>
+    <button data-tab="analyzed">Разобрано</button>
+    <button data-tab="tracked">В трекере</button>
+    <button data-tab="demo">Демо</button>
   </div>
 
   <div class="summary" id="summary"></div>
@@ -154,65 +192,140 @@
 
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let tab = "new";
 
-async function run() {
-  const button = document.getElementById("run");
-  const list = document.getElementById("list");
-  button.disabled = true;
-  list.innerHTML = '<div class="empty">Ищу и оцениваю…</div>';
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || response.statusText);
+  }
+  return response.json();
+}
+const post = (path, body) => api(path, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: body ? JSON.stringify(body) : undefined,
+});
 
-  const params = new URLSearchParams({
-    q: document.getElementById("query").value,
-    resume: document.getElementById("resume").value,
-    source: document.getElementById("source").value,
-  });
-  const data = await (await fetch("/api/scan?" + params)).json();
-  button.disabled = false;
+async function refreshStatus() {
+  const { scout, counts } = await api("/api/status");
+  const dot = document.getElementById("dot");
+  dot.className = "dot" + (scout.busy ? " busy" : scout.last_error ? " err" : scout.running ? " on" : "");
+  document.getElementById("stateText").textContent =
+    scout.busy ? "собираю…" : scout.running ? "скаут включён" : "скаут выключен";
 
+  const when = (v) => v ? v.replace("T", " ").slice(5, 16) : "—";
+  document.getElementById("stateNote").textContent =
+    "последний сбор " + when(scout.last_run) +
+    (scout.running ? ", следующий " + when(scout.next_run) : "") +
+    " · найдено " + scout.last_found + ", новых " + scout.last_fresh;
+
+  document.getElementById("btnToggle").textContent = scout.running ? "Остановить" : "Включить скаут";
   const banner = document.getElementById("banner");
-  banner.hidden = !data.warning;
-  if (data.warning) banner.textContent = data.warning;
+  banner.hidden = !scout.last_error;
+  if (scout.last_error) banner.textContent = scout.last_error + " (чаще всего это выключенный VPN)";
 
-  const s = data.summary;
-  document.getElementById("summary").innerHTML = `
-    <div><b>${s.total}</b><span>найдено</span></div>
-    <div><b>${s.strong}</b><span>сильных матчей</span></div>
-    <div><b>${s.maybe}</b><span>стоит посмотреть</span></div>
-    <div><b>${s.skipped}</b><span>отсеяно</span></div>`;
+  const urlField = document.getElementById("searchUrl");
+  if (document.activeElement !== urlField) urlField.value = scout.search_url || "";
+  const intField = document.getElementById("interval");
+  if (document.activeElement !== intField) intField.value = scout.interval_minutes;
 
-  if (!data.items.length) {
-    list.innerHTML = '<div class="empty">Ничего не нашлось</div>';
-    return;
+  document.getElementById("summary").innerHTML =
+    '<div><b>' + (counts.total || 0) + '</b><span>всего находок</span></div>' +
+    '<div><b>' + (counts.new || 0) + '</b><span>ждут разбора</span></div>' +
+    '<div><b>' + (counts.analyzed || 0) + '</b><span>разобрано</span></div>' +
+    '<div><b>' + (counts.tracked || 0) + '</b><span>уехало в трекер</span></div>';
+}
+
+function card(v, demo) {
+  const css = v.css || (v.verdict === "сильный матч" ? "strong" : v.verdict === "пропустить" ? "skip"
+            : v.verdict === "стоит посмотреть" ? "maybe" : "weak");
+  let money = "не указана";
+  if (demo) money = v.salary;
+  else if (v.salary_to || v.salary_from) {
+    const top = v.salary_to || v.salary_from;
+    money = (v.salary_from && v.salary_from !== v.salary_to ? Math.round(v.salary_from/1000) + "-" : "до ")
+          + Math.round(top/1000) + "к";
+  }
+  // Ссылка на выдачу нужна только пока вакансия не разобрана
+  const showLink = v.url && v.url !== "#" && v.status !== "analyzed" && v.status !== "tracked";
+
+  let actions = "";
+  if (!demo) {
+    let buttons = "";
+    if (v.status === "new") buttons += '<button class="primary" onclick="analyze(\'' + v.id + '\', this)">Разобрать</button>';
+    if (v.status === "analyzed") buttons += '<button class="primary" onclick="mark(\'' + v.id + '\', \'sent\')">Отклик отправлен → в трекер</button>';
+    if (v.status !== "tracked") buttons += '<button onclick="mark(\'' + v.id + '\', \'dropped\')">Не интересно</button>';
+    actions = '<div class="row-actions">' + buttons + '</div>';
   }
 
-  list.innerHTML = data.items.map(v => `
-    <article class="card ${v.css}">
-      <div class="card-head">
-        <h3>${v.url && v.url !== "#" ? `<a href="${esc(v.url)}" target="_blank" rel="noopener">${esc(v.name)}</a>` : esc(v.name)}
-          <span class="who">· ${esc(v.employer)}</span></h3>
-        <span class="badge ${v.css}">${esc(v.verdict)} · ${v.score}</span>
-      </div>
-      <div class="meta">
-        <span class="money">${esc(v.salary)}</span>
-        ${v.track ? `<span>трек: ${esc(v.track)}</span>` : ""}
-        ${v.schedule ? `<span>${esc(v.schedule)}</span>` : ""}
-        ${v.experience ? `<span>${esc(v.experience)}</span>` : ""}
-        <span>${esc(v.published)}</span>
-        ${v.url && v.url !== "#" ? `<a href="${esc(v.url)}" target="_blank" rel="noopener">открыть вакансию →</a>` : ""}
-      </div>
-      <div class="bar"><i style="width:${v.score}%"></i></div>
-      <div class="why">
-        ${v.blockers.length ? `<div><span class="k">блокеры</span><span class="warn">${v.blockers.map(esc).join("; ")}</span></div>` : ""}
-        ${v.matched.length ? `<div><span class="k">совпало</span><span>${v.matched.map(m => `<span class="chip">${esc(m)}</span>`).join("")}</span></div>` : ""}
-        ${v.gaps.length ? `<div><span class="k">пробелы</span><span>${v.gaps.map(esc).join("; ")}</span></div>` : ""}
-        ${v.notes.length ? `<div><span class="k">внимание</span><span class="warn">${v.notes.map(esc).join("; ")}</span></div>` : ""}
-      </div>
-      ${v.letter ? `<details>
-        <summary>Черновик сопроводительного</summary>
-        <div class="letter" id="l${esc(v.id)}">${esc(v.letter)}</div>
-        <button class="copy" type="button" onclick="copyLetter('l${esc(v.id)}', this)">Скопировать</button>
-      </details>` : ""}
-    </article>`).join("");
+  return '<article class="card ' + css + '">' +
+    '<div class="card-head"><h3>' + esc(v.name) + ' <span class="who">· ' + esc(v.employer || "") + '</span></h3>' +
+      (v.verdict ? '<span class="badge ' + css + '">' + esc(v.verdict) + ' · ' + v.score + '</span>' : "") +
+    '</div>' +
+    '<div class="meta"><span class="money">' + esc(money) + '</span>' +
+      (v.track ? '<span>трек: ' + esc(v.track) + '</span>' : "") +
+      (v.experience ? '<span>' + esc(v.experience) + '</span>' : "") +
+      (v.remote ? '<span>удалёнка</span>' : "") +
+      (showLink ? '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">открыть вакансию →</a>' : "") +
+    '</div>' +
+    (v.score != null ? '<div class="bar"><i style="width:' + v.score + '%"></i></div>' : "") +
+    '<div class="why">' +
+      (v.blockers ? '<div><span class="k">блокеры</span><span class="warn">' + esc(v.blockers) + '</span></div>' : "") +
+      (v.matched ? '<div><span class="k">совпало</span><span>' + v.matched.split(", ").map(m => '<span class="chip">' + esc(m) + '</span>').join("") + '</span></div>' : "") +
+      (v.gaps ? '<div><span class="k">пробелы</span><span>' + esc(v.gaps) + '</span></div>' : "") +
+      (v.notes ? '<div><span class="k">внимание</span><span class="warn">' + esc(v.notes) + '</span></div>' : "") +
+    '</div>' +
+    (v.letter ? '<details><summary>Черновик сопроводительного</summary><div class="letter" id="l' + esc(v.id) + '">' + esc(v.letter) + '</div><button class="copy" type="button" onclick="copyLetter(\'l' + esc(v.id) + '\', this)">Скопировать</button></details>' : "") +
+    actions +
+  '</article>';
+}
+
+async function load() {
+  const list = document.getElementById("list");
+  list.innerHTML = '<div class="empty">Загружаю…</div>';
+  try {
+    if (tab === "demo") {
+      const items = await api("/api/demo");
+      list.innerHTML = items.map(v => card(v, true)).join("");
+      return;
+    }
+    const items = await api("/api/finds?status=" + tab);
+    if (items.length) {
+      list.innerHTML = items.map(v => card(v, false)).join("");
+    } else {
+      list.innerHTML = '<div class="empty">' +
+        (tab === "new" ? "Скаут пока ничего не нашёл. Укажите ссылку на выдачу и нажмите «Собрать сейчас»." : "Пусто") +
+        '</div>';
+    }
+  } catch (error) {
+    list.innerHTML = '<div class="empty">Ошибка: ' + esc(error.message) + '</div>';
+  }
+}
+
+async function analyze(id, button) {
+  button.disabled = true;
+  button.textContent = "разбираю…";
+  try {
+    await post("/api/finds/" + id + "/analyze");
+    await load();
+    await refreshStatus();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Разобрать";
+    alert(error.message);
+  }
+}
+
+async function mark(id, status) {
+  if (status === "sent" && !confirm("Перенести вакансию в трекер как отправленный отклик?")) return;
+  try {
+    await post("/api/finds/" + id + "/status", { status });
+    await load();
+    await refreshStatus();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 function copyLetter(id, button) {
@@ -220,6 +333,51 @@ function copyLetter(id, button) {
   button.textContent = "Скопировано";
   setTimeout(() => (button.textContent = "Скопировать"), 1500);
 }
+
+document.getElementById("tabs").addEventListener("click", (e) => {
+  const button = e.target.closest("button[data-tab]");
+  if (!button) return;
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.remove("active"));
+  button.classList.add("active");
+  tab = button.dataset.tab;
+  load();
+});
+
+document.getElementById("btnToggle").addEventListener("click", async (e) => {
+  const running = e.target.textContent === "Остановить";
+  e.target.disabled = true;
+  try { await post(running ? "/api/scout/stop" : "/api/scout/start"); }
+  catch (error) { alert(error.message); }
+  e.target.disabled = false;
+  refreshStatus();
+});
+
+document.getElementById("btnLogin").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  try {
+    const r = await post("/api/scout/login");
+    alert(r.hint);
+  } catch (error) { alert(error.message); }
+  e.target.disabled = false;
+});
+
+document.getElementById("btnScan").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  e.target.textContent = "собираю…";
+  try { await post("/api/scout/scan"); } catch (error) { alert(error.message); }
+  e.target.disabled = false;
+  e.target.textContent = "Собрать сейчас";
+  refreshStatus();
+  load();
+});
+
+document.getElementById("btnSave").addEventListener("click", async () => {
+  await post("/api/settings", {
+    search_url: document.getElementById("searchUrl").value,
+    interval_minutes: parseInt(document.getElementById("interval").value) || 180,
+  });
+  refreshStatus();
+});
 
 const root = document.documentElement;
 const toggle = document.getElementById("themeToggle");
@@ -235,9 +393,9 @@ toggle.addEventListener("click", () => {
 });
 paint();
 
-document.getElementById("run").addEventListener("click", run);
-document.getElementById("query").addEventListener("keydown", e => { if (e.key === "Enter") run(); });
-run();
+refreshStatus();
+load();
+setInterval(refreshStatus, 15000);
 </script>
 </body>
 </html>
