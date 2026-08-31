@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<script>
+  (() => {
+    let saved = null;
+    try { saved = localStorage.getItem("theme"); } catch (e) {}
+    document.documentElement.dataset.theme = saved
+      || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Разведчик вакансий</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23b0561f'/%3E%3Ccircle cx='28' cy='28' r='13' fill='none' stroke='white' stroke-width='5'/%3E%3Cpath d='M38 38 L50 50' stroke='white' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bitter:wght@600;700;800&family=Golos+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: oklch(1 0 0);
+    --surface: oklch(0.97 0.003 40);
+    --raised: oklch(1 0 0);
+    --dark: oklch(0.23 0.012 40);
+    --on-dark: #fff;
+    --ink: oklch(0.24 0.015 40);
+    --muted: oklch(0.45 0.015 40);
+    --accent: oklch(0.58 0.15 42);
+    --accent-deep: oklch(0.46 0.125 42);
+    --accent-soft: oklch(0.96 0.02 42);
+    --line: oklch(0.9 0.004 40);
+    --strong-bg: oklch(0.94 0.05 145); --strong-ink: oklch(0.38 0.1 145);
+    --maybe-bg:  oklch(0.95 0.05 75);  --maybe-ink:  oklch(0.42 0.1 60);
+    --weak-bg:   oklch(0.95 0.005 40); --weak-ink:   oklch(0.5 0.01 40);
+    --skip-bg:   oklch(0.94 0.04 25);  --skip-ink:   oklch(0.45 0.13 25);
+    --display: "Bitter", Georgia, serif;
+    --body: "Golos Text", "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: oklch(0.17 0.008 40);
+    --surface: oklch(0.21 0.01 40);
+    --raised: oklch(0.235 0.011 40);
+    --dark: oklch(0.28 0.014 40);
+    --on-dark: oklch(0.95 0.005 40);
+    --ink: oklch(0.93 0.006 40);
+    --muted: oklch(0.71 0.014 40);
+    --accent: oklch(0.75 0.14 52);
+    --accent-deep: oklch(0.8 0.13 58);
+    --accent-soft: oklch(0.26 0.03 45);
+    --line: oklch(0.32 0.009 40);
+    --strong-bg: oklch(0.26 0.05 145); --strong-ink: oklch(0.82 0.13 145);
+    --maybe-bg:  oklch(0.28 0.05 70);  --maybe-ink:  oklch(0.85 0.12 70);
+    --weak-bg:   oklch(0.26 0.008 40); --weak-ink:   oklch(0.72 0.01 40);
+    --skip-bg:   oklch(0.28 0.05 25);  --skip-ink:   oklch(0.82 0.11 25);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 1rem; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+  p { margin: 0; }
+  a { color: var(--accent-deep); text-underline-offset: 3px; }
+  button, input, select { font: inherit; color: inherit; }
+  .wrap { max-width: 68rem; margin-inline: auto; padding: clamp(1.5rem, 4vw, 2.75rem) clamp(1rem, 4vw, 2.5rem) 4rem; }
+
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 0.5rem; }
+  h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); font-weight: 800; letter-spacing: -0.015em; }
+  .tagline { color: var(--muted); margin-top: 0.35rem; max-width: 46em; }
+  .theme-switch { width: 2.5rem; height: 2.5rem; border-radius: 50%; border: 1px solid var(--line); background: var(--raised); cursor: pointer; flex: none; font-size: 1.05rem; }
+  .theme-switch:hover { border-color: var(--accent); }
+
+  .panel { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 1.75rem 0 1.25rem; }
+  .panel input { flex: 1 1 18rem; padding: 0.55rem 1rem; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); }
+  .panel select { padding: 0.55rem 0.8rem; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); }
+  .panel button { padding: 0.55rem 1.4rem; border: 0; border-radius: 999px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; transition: transform 0.2s var(--ease); }
+  :root[data-theme="dark"] .panel button { color: oklch(0.18 0.01 40); }
+  .panel button:hover { transform: translateY(-1px); }
+  .panel button[disabled] { opacity: 0.55; cursor: progress; transform: none; }
+
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+  .summary div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem 0.95rem; }
+  .summary b { display: block; font-family: var(--display); font-size: 1.5rem; color: var(--accent-deep); line-height: 1.15; }
+  .summary span { font-size: 0.85rem; color: var(--muted); }
+
+  .card { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 14px; padding: 1.1rem 1.25rem; margin-bottom: 0.9rem; background: var(--raised); transition: border-color 0.2s; }
+  .card.strong { border-left-color: var(--strong-ink); }
+  .card.maybe  { border-left-color: var(--maybe-ink); }
+  .card.skip   { border-left-color: var(--skip-ink); opacity: 0.62; }
+  .card-head { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: baseline; }
+  .card-head h3 { font-size: 1.08rem; font-weight: 700; flex: 1 1 20rem; }
+  .card-head .who { color: var(--muted); font-weight: 500; }
+  .badge { font-size: 0.78rem; font-weight: 700; padding: 0.15rem 0.7rem; border-radius: 999px; white-space: nowrap; }
+  .badge.strong { background: var(--strong-bg); color: var(--strong-ink); }
+  .badge.maybe  { background: var(--maybe-bg);  color: var(--maybe-ink); }
+  .badge.weak   { background: var(--weak-bg);   color: var(--weak-ink); }
+  .badge.skip   { background: var(--skip-bg);   color: var(--skip-ink); }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; margin-top: 0.5rem; font-size: 0.87rem; color: var(--muted); }
+  .meta .money { color: var(--accent-deep); font-weight: 600; }
+
+  .bar { height: 5px; border-radius: 3px; background: var(--surface); margin-top: 0.75rem; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
+  .why { margin-top: 0.8rem; display: grid; gap: 0.4rem; font-size: 0.9rem; }
+  .why div { display: flex; gap: 0.5rem; }
+  .why .k { flex: none; width: 6.5rem; color: var(--muted); font-size: 0.83rem; padding-top: 0.1rem; }
+  .chip { display: inline-block; background: var(--accent-soft); border-radius: 6px; padding: 0.05rem 0.45rem; margin: 0 0.25rem 0.25rem 0; font-size: 0.83rem; }
+  .warn { color: var(--skip-ink); }
+
+  details { margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
+  summary { cursor: pointer; font-size: 0.88rem; color: var(--muted); }
+  .letter { white-space: pre-wrap; font-size: 0.9rem; background: var(--surface); border-radius: 10px; padding: 0.9rem 1rem; margin-top: 0.6rem; }
+  .copy { margin-top: 0.5rem; padding: 0.3rem 0.9rem; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); cursor: pointer; font-size: 0.85rem; }
+  .copy:hover { border-color: var(--accent); }
+
+  .note { color: var(--muted); font-size: 0.9rem; margin-top: 1.5rem; }
+  .empty { padding: 3rem 1rem; text-align: center; color: var(--muted); }
+  .banner { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; padding: 0.7rem 1rem; margin-bottom: 1.25rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Разведчик вакансий</h1>
+      <p class="tagline">Ищет вакансии, оценивает по моему профилю и объясняет оценку. Отклик не отправляет: решение остаётся за человеком.</p>
+    </div>
+    <button class="theme-switch" id="themeToggle" type="button" title="Переключить тему"></button>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <div class="panel">
+    <input id="query" type="search" value="инженер сопровождения" placeholder="Что ищем">
+    <select id="source">
+      <option value="demo">Демо-набор</option>
+      <option value="hh">hh.ru</option>
+    </select>
+    <button id="run" type="button">Искать</button>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div id="list"></div>
+  <p class="note">Оценка - подсказка, а не приговор. Она показывает, на что смотреть в первую очередь, и всегда объясняет, почему.</p>
+</div>
+
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function run() {
+  const button = document.getElementById("run");
+  const list = document.getElementById("list");
+  button.disabled = true;
+  list.innerHTML = '<div class="empty">Ищу и оцениваю…</div>';
+
+  const params = new URLSearchParams({
+    q: document.getElementById("query").value,
+    source: document.getElementById("source").value,
+  });
+  const data = await (await fetch("/api/scan?" + params)).json();
+  button.disabled = false;
+
+  const banner = document.getElementById("banner");
+  banner.hidden = !data.warning;
+  if (data.warning) banner.textContent = data.warning;
+
+  const s = data.summary;
+  document.getElementById("summary").innerHTML = `
+    <div><b>${s.total}</b><span>найдено</span></div>
+    <div><b>${s.strong}</b><span>сильных матчей</span></div>
+    <div><b>${s.maybe}</b><span>стоит посмотреть</span></div>
+    <div><b>${s.skipped}</b><span>отсеяно</span></div>`;
+
+  if (!data.items.length) {
+    list.innerHTML = '<div class="empty">Ничего не нашлось</div>';
+    return;
+  }
+
+  list.innerHTML = data.items.map(v => `
+    <article class="card ${v.css}">
+      <div class="card-head">
+        <h3>${v.url && v.url !== "#" ? `<a href="${esc(v.url)}" target="_blank" rel="noopener">${esc(v.name)}</a>` : esc(v.name)}
+          <span class="who">· ${esc(v.employer)}</span></h3>
+        <span class="badge ${v.css}">${esc(v.verdict)} · ${v.score}</span>
+      </div>
+      <div class="meta">
+        <span class="money">${esc(v.salary)}</span>
+        ${v.track ? `<span>трек: ${esc(v.track)}</span>` : ""}
+        ${v.schedule ? `<span>${esc(v.schedule)}</span>` : ""}
+        ${v.experience ? `<span>${esc(v.experience)}</span>` : ""}
+        <span>${esc(v.published)}</span>
+      </div>
+      <div class="bar"><i style="width:${v.score}%"></i></div>
+      <div class="why">
+        ${v.blockers.length ? `<div><span class="k">блокеры</span><span class="warn">${v.blockers.map(esc).join("; ")}</span></div>` : ""}
+        ${v.matched.length ? `<div><span class="k">совпало</span><span>${v.matched.map(m => `<span class="chip">${esc(m)}</span>`).join("")}</span></div>` : ""}
+        ${v.gaps.length ? `<div><span class="k">пробелы</span><span>${v.gaps.map(esc).join("; ")}</span></div>` : ""}
+        ${v.notes.length ? `<div><span class="k">внимание</span><span class="warn">${v.notes.map(esc).join("; ")}</span></div>` : ""}
+      </div>
+      ${v.letter ? `<details>
+        <summary>Черновик сопроводительного</summary>
+        <div class="letter" id="l${esc(v.id)}">${esc(v.letter)}</div>
+        <button class="copy" type="button" onclick="copyLetter('l${esc(v.id)}', this)">Скопировать</button>
+      </details>` : ""}
+    </article>`).join("");
+}
+
+function copyLetter(id, button) {
+  navigator.clipboard.writeText(document.getElementById(id).textContent);
+  button.textContent = "Скопировано";
+  setTimeout(() => (button.textContent = "Скопировать"), 1500);
+}
+
+const root = document.documentElement;
+const toggle = document.getElementById("themeToggle");
+const paint = () => {
+  const dark = root.dataset.theme === "dark";
+  toggle.textContent = dark ? "☀" : "☾";
+  toggle.setAttribute("aria-label", dark ? "Светлая тема" : "Тёмная тема");
+};
+toggle.addEventListener("click", () => {
+  root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+  try { localStorage.setItem("theme", root.dataset.theme); } catch (e) {}
+  paint();
+});
+paint();
+
+document.getElementById("run").addEventListener("click", run);
+document.getElementById("query").addEventListener("keydown", e => { if (e.key === "Enter") run(); });
+run();
+</script>
+</body>
+</html>
