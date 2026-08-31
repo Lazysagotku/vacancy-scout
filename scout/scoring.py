@@ -91,6 +91,12 @@ def score(vacancy: Vacancy) -> Verdict:
     if any(word in low for word in junior):
         value = max(0, value - 20)
         notes.append("роль рассчитана на новичка - риск понижения уровня")
+
+    # Хелпдеск и работа с железом: стек может совпадать, но это шаг назад
+    downgrades = [reason for word, reason in profile.DOWNGRADE.items() if word in low]
+    if downgrades:
+        value = max(0, value - 8 * len(downgrades))
+        notes.extend(downgrades[:3])
     if "передача запросов на следующие" in low or "эскалировать на вторую" in low:
         value = max(0, value - 10)
         notes.append("по задачам это первая линия")

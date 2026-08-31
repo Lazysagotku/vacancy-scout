@@ -133,7 +133,13 @@
   <div class="banner" id="banner" hidden></div>
 
   <div class="panel">
-    <input id="query" type="search" value="инженер сопровождения" placeholder="Что ищем">
+    <input id="query" type="search" placeholder="Свой запрос - или оставь пустым, тогда ищу по резюме">
+    <select id="resume" title="Под какое резюме искать">
+      <option value="support">Сопровождение</option>
+      <option value="python">Python</option>
+      <option value="csharp">C#</option>
+      <option value="all">Все три</option>
+    </select>
     <select id="source">
       <option value="demo">Демо-набор</option>
       <option value="hh">hh.ru</option>
@@ -157,6 +163,7 @@ async function run() {
 
   const params = new URLSearchParams({
     q: document.getElementById("query").value,
+    resume: document.getElementById("resume").value,
     source: document.getElementById("source").value,
   });
   const data = await (await fetch("/api/scan?" + params)).json();
@@ -191,6 +198,7 @@ async function run() {
         ${v.schedule ? `<span>${esc(v.schedule)}</span>` : ""}
         ${v.experience ? `<span>${esc(v.experience)}</span>` : ""}
         <span>${esc(v.published)}</span>
+        ${v.url && v.url !== "#" ? `<a href="${esc(v.url)}" target="_blank" rel="noopener">открыть вакансию →</a>` : ""}
       </div>
       <div class="bar"><i style="width:${v.score}%"></i></div>
       <div class="why">

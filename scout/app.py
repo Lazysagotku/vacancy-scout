@@ -9,7 +9,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from scout import hh
+from scout import hh, profile
 from scout.demo import demo_vacancies
 from scout.letter import draft
 from scout.scoring import score
@@ -30,15 +30,31 @@ def health() -> dict[str, str]:
 
 @app.get("/api/scan", tags=["поиск"])
 def scan(
-    q: str = Query(default="инженер сопровождения"),
+    q: str = Query(default=""),
+    resume: str = Query(default="support", pattern="^(support|python|csharp|all)$"),
     source: str = Query(default="demo", pattern="^(demo|hh)$"),
     limit: int = Query(default=12, ge=1, le=50),
 ):
-    """Ищет вакансии и оценивает каждую по профилю."""
+    """Ищет вакансии и оценивает каждую по профилю.
+
+    Если строка запроса пустая - берём готовый набор запросов под резюме.
+    """
     warning = ""
     if source == "hh":
+        if q.strip():
+            queries = [q.strip()]
+        elif resume == "all":
+            queries = [item for group in profile.SEARCHES.values() for item in group]
+        else:
+            queries = profile.SEARCHES[resume]
         try:
-            found = hh.search(q, per_page=limit)
+            found, seen = [], set()
+            for query in queries:
+                for vacancy in hh.search(query, per_page=limit):
+                    if vacancy.id in seen:
+                        continue
+                    seen.add(vacancy.id)
+                    found.append(vacancy)
             for vacancy in found:
                 hh.enrich(vacancy)
         except hh.NeedsToken as error:
