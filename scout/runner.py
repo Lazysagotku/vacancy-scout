@@ -58,6 +58,8 @@ def scan_once() -> dict:
     try:
         items = collect(url)
         found = len(items)
+        # Отсеянные остаются в базе, поэтому save_finds их просто не тронет -
+        # повторно они в «новые» не попадут
         fresh = store.save_finds(items, query=url)
     except CollectError as problem:
         error = str(problem)

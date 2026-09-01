@@ -159,6 +159,7 @@ def analyze_all(limit: int = Query(default=10, ge=1, le=40)):
 
 class Mark(BaseModel):
     status: str
+    reason: str | None = None
 
 
 @app.post("/api/finds/{vacancy_id}/status", tags=["находки"])
@@ -181,7 +182,11 @@ def set_status(vacancy_id: str, payload: Mark):
                           sent_at=datetime.now().isoformat(timespec="seconds"))
         return {"moved_to_tracker": tracker_id, "status": "tracked"}
 
-    store.update_find(vacancy_id, status=payload.status)
+    if payload.status == "dropped":
+        store.drop(vacancy_id, payload.reason or "")
+        return {"status": "dropped", "reason": payload.reason or "не заинтересовала"}
+
+    store.update_find(vacancy_id, status=payload.status, drop_reason=None)
     return {"status": payload.status}
 
 

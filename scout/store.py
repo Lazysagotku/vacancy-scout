@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS finds (
     query        TEXT,                      -- по какому запросу нашлась
 
     status       TEXT NOT NULL DEFAULT 'new',   -- new | analyzed | sent | tracked | dropped
+    drop_reason  TEXT,                          -- почему отсеяли: важно, чтобы не пересматривать
     score        INTEGER,
     verdict      TEXT,
     track        TEXT,
@@ -149,6 +150,17 @@ def update_find(vacancy_id: str, **fields) -> None:
     sets = ", ".join(f"{key} = ?" for key in fields)
     with connect() as con:
         con.execute(f"UPDATE finds SET {sets} WHERE id = ?", (*fields.values(), vacancy_id))
+
+
+def drop(vacancy_id: str, reason: str = "") -> None:
+    """Отсеивает находку. Она остаётся в базе - иначе следующий сбор принесёт её снова."""
+    update_find(vacancy_id, status="dropped", drop_reason=reason or "не заинтересовала")
+
+
+def known_ids() -> set[str]:
+    """Все известные id, включая отсеянные: по ним отсекаются повторы при сборе."""
+    with connect() as con:
+        return {row["id"] for row in con.execute("SELECT id FROM finds")}
 
 
 def counts() -> dict[str, int]:

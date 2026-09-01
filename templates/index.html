@@ -89,6 +89,7 @@
   :root[data-theme="dark"] .ctl-row button { color: oklch(0.18 0.01 40); }
   .ctl-row button.ghost { background: none; border: 1px solid var(--line); color: inherit; font-weight: 500; }
   .ctl-row button.ghost:hover { border-color: var(--accent); }
+  .ctl-row button.ghost.ok { border-color: var(--strong-ink); color: var(--strong-ink); }
   .ctl-note { color: var(--muted); font-size: 0.87rem; }
   .grow { flex: 1; }
   .dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; background: var(--muted); flex: none; }
@@ -182,6 +183,7 @@
     <button data-tab="new" class="active">Найдено скаутом</button>
     <button data-tab="analyzed">Разобрано</button>
     <button data-tab="tracked">В трекере</button>
+      <button data-tab="dropped">Отсеяно</button>
     <button data-tab="demo">Демо</button>
   </div>
 
@@ -221,6 +223,7 @@ async function refreshStatus() {
     " · найдено " + scout.last_found + ", новых " + scout.last_fresh;
 
   document.getElementById("btnToggle").textContent = scout.running ? "Остановить" : "Включить скаут";
+  checkAuth();
   const banner = document.getElementById("banner");
   banner.hidden = !scout.last_error;
   if (scout.last_error) banner.textContent = scout.last_error + " (чаще всего это выключенный VPN)";
@@ -234,7 +237,8 @@ async function refreshStatus() {
     '<div><b>' + (counts.total || 0) + '</b><span>всего находок</span></div>' +
     '<div><b>' + (counts.new || 0) + '</b><span>ждут разбора</span></div>' +
     '<div><b>' + (counts.analyzed || 0) + '</b><span>разобрано</span></div>' +
-    '<div><b>' + (counts.tracked || 0) + '</b><span>уехало в трекер</span></div>';
+    '<div><b>' + (counts.tracked || 0) + '</b><span>уехало в трекер</span></div>' +
+    '<div><b>' + (counts.dropped || 0) + '</b><span>отсеяно</span></div>';
 }
 
 function card(v, demo) {
@@ -255,7 +259,8 @@ function card(v, demo) {
     let buttons = "";
     if (v.status === "new") buttons += '<button class="primary" onclick="analyze(\'' + v.id + '\', this)">Разобрать</button>';
     if (v.status === "analyzed") buttons += '<button class="primary" onclick="mark(\'' + v.id + '\', \'sent\')">Отклик отправлен → в трекер</button>';
-    if (v.status !== "tracked") buttons += '<button onclick="mark(\'' + v.id + '\', \'dropped\')">Не интересно</button>';
+    if (v.status === "dropped") buttons += '<button onclick="mark(\'' + v.id + '\', \'new\')">Вернуть в список</button>';
+    else if (v.status !== "tracked") buttons += '<button onclick="mark(\'' + v.id + '\', \'dropped\')">Не интересно</button>';
     actions = '<div class="row-actions">' + buttons + '</div>';
   }
 
@@ -275,6 +280,7 @@ function card(v, demo) {
       (v.matched ? '<div><span class="k">совпало</span><span>' + v.matched.split(", ").map(m => '<span class="chip">' + esc(m) + '</span>').join("") + '</span></div>' : "") +
       (v.gaps ? '<div><span class="k">пробелы</span><span>' + esc(v.gaps) + '</span></div>' : "") +
       (v.notes ? '<div><span class="k">внимание</span><span class="warn">' + esc(v.notes) + '</span></div>' : "") +
+      (v.drop_reason ? '<div><span class="k">отсеяна</span><span class="warn">' + esc(v.drop_reason) + '</span></div>' : "") +
     '</div>' +
     (v.letter ? '<details><summary>Черновик сопроводительного</summary><div class="letter" id="l' + esc(v.id) + '">' + esc(v.letter) + '</div><button class="copy" type="button" onclick="copyLetter(\'l' + esc(v.id) + '\', this)">Скопировать</button></details>' : "") +
     actions +
@@ -295,7 +301,9 @@ async function load() {
       list.innerHTML = items.map(v => card(v, false)).join("");
     } else {
       list.innerHTML = '<div class="empty">' +
-        (tab === "new" ? "Скаут пока ничего не нашёл. Укажите ссылку на выдачу и нажмите «Собрать сейчас»." : "Пусто") +
+        (tab === "new" ? "Скаут пока ничего не нашёл. Укажите ссылку на выдачу и нажмите «Собрать сейчас»."
+         : tab === "dropped" ? "Отсеянных пока нет. Они попадают сюда и больше не мешают в основном списке."
+         : "Пусто") +
         '</div>';
     }
   } catch (error) {
@@ -319,8 +327,13 @@ async function analyze(id, button) {
 
 async function mark(id, status) {
   if (status === "sent" && !confirm("Перенести вакансию в трекер как отправленный отклик?")) return;
+  let reason = null;
+  if (status === "dropped") {
+    reason = prompt("Почему не интересно? Причина сохранится, чтобы не пересматривать вакансию заново.", "");
+    if (reason === null) return;
+  }
   try {
-    await post("/api/finds/" + id + "/status", { status });
+    await post("/api/finds/" + id + "/status", { status, reason });
     await load();
     await refreshStatus();
   } catch (error) {
@@ -352,11 +365,30 @@ document.getElementById("btnToggle").addEventListener("click", async (e) => {
   refreshStatus();
 });
 
+// Состояние входа проверяем не чаще раза в минуту: проверка поднимает браузер
+let authChecked = 0, authOk = null;
+async function checkAuth(force) {
+  const button = document.getElementById("btnLogin");
+  if (!force && Date.now() - authChecked < 60000) return;
+  authChecked = Date.now();
+  try {
+    const r = await api("/api/scout/auth");
+    authOk = r.authorized;
+  } catch (e) { authOk = null; }
+  button.textContent = authOk === true ? "✓ вход в hh есть"
+                     : authOk === false ? "Войти в hh" : "Проверить вход";
+  button.classList.toggle("ok", authOk === true);
+  button.title = authOk === true
+    ? "Сессия hh живая. Нажмите, если нужно войти заново"
+    : "Без входа hh отдаёт общий поиск вместо выдачи по резюме";
+}
+
 document.getElementById("btnLogin").addEventListener("click", async (e) => {
   e.target.disabled = true;
   try {
     const r = await post("/api/scout/login");
     alert(r.hint);
+    setTimeout(() => checkAuth(true), 30000);
   } catch (error) { alert(error.message); }
   e.target.disabled = false;
 });
