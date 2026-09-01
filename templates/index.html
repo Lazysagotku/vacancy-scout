@@ -89,6 +89,12 @@
   :root[data-theme="dark"] .ctl-row button { color: oklch(0.18 0.01 40); }
   .ctl-row button.ghost { background: none; border: 1px solid var(--line); color: inherit; font-weight: 500; }
   .ctl-row button.ghost:hover { border-color: var(--accent); }
+  /* Тёмная тема красит залитые кнопки тёмным текстом - у них светлый accent
+     под ним. Но у ghost фона нет, и то же правило давало тёмное на тёмном.
+     Специфичность здесь выше, поэтому ghost остаётся читаемым. */
+  :root[data-theme="dark"] .ctl-row button.ghost,
+  :root[data-theme="dark"] .panel button.ghost { color: var(--ink); }
+  :root[data-theme="dark"] .ctl-row button.ghost.ok { color: var(--strong-ink); }
   .ctl-row button.ghost.ok { border-color: var(--strong-ink); color: var(--strong-ink); }
   .ctl-note { color: var(--muted); font-size: 0.87rem; }
   .grow { flex: 1; }
