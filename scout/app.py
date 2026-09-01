@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from scout import collector, runner, store, tracker_link
+from scout.analysis import analyze_find
 from scout.demo import demo_vacancies
 from scout.hh import Vacancy
 from scout.letter import draft
@@ -48,6 +49,7 @@ def get_status():
 class Settings(BaseModel):
     search_url: str | None = None
     interval_minutes: int | None = None
+    analyze_limit: int | None = None
 
 
 @app.post("/api/settings", tags=["скаутинг"])
@@ -56,6 +58,8 @@ def save_settings(payload: Settings):
         store.set_setting("search_url", payload.search_url.strip())
     if payload.interval_minutes is not None:
         store.set_setting("interval_minutes", max(15, payload.interval_minutes))
+    if payload.analyze_limit is not None:
+        store.set_setting("analyze_limit", max(0, min(60, payload.analyze_limit)))
     return runner.status()
 
 
@@ -106,55 +110,21 @@ def get_finds(status: str | None = Query(default=None)):
 @app.post("/api/finds/{vacancy_id}/analyze", tags=["находки"])
 def analyze(vacancy_id: str, deep: bool = Query(default=True)):
     """Разбирает находку: догружает описание, скорит, готовит черновик письма."""
-    items = [f for f in store.list_finds() if f["id"] == vacancy_id]
-    if not items:
-        raise HTTPException(404, "Находка не найдена")
-    find = items[0]
-
-    description = find.get("description") or ""
-    if deep and not description:
-        try:
-            description = collector.fetch_description(vacancy_id)
-        except collector.CollectError as error:
-            raise HTTPException(502, str(error)) from error
-
-    vacancy = Vacancy(
-        id=find["id"], name=find["name"], employer=find.get("employer") or "",
-        url=find.get("url") or "", salary_from=find.get("salary_from"),
-        salary_to=find.get("salary_to"), currency="RUR", schedule=None,
-        experience=find.get("experience"), published=find.get("found_at", "")[:10],
-        description=description,
-    )
-    verdict = score(vacancy)
-    store.update_find(
-        vacancy_id,
-        status="analyzed",
-        score=verdict.score,
-        verdict=verdict.verdict,
-        track=verdict.track,
-        matched=", ".join(name for name, _ in verdict.matched),
-        gaps="; ".join(verdict.gaps),
-        blockers="; ".join(verdict.blockers),
-        notes="; ".join(verdict.notes),
-        letter=draft(vacancy, verdict),
-        description=description,
-        analyzed_at=datetime.now().isoformat(timespec="seconds"),
-    )
-    return [f for f in store.list_finds() if f["id"] == vacancy_id][0]
+    try:
+        return analyze_find(vacancy_id, deep=deep)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+    except collector.CollectError as error:
+        raise HTTPException(502, str(error)) from error
 
 
 @app.post("/api/finds/analyze-all", tags=["находки"])
-def analyze_all(limit: int = Query(default=10, ge=1, le=40)):
-    """Разбирает все неразобранные - по одной, чтобы не долбить hh пачкой."""
-    done, failed = [], []
-    for find in store.list_finds("new")[:limit]:
-        try:
-            analyze(find["id"])
-            done.append(find["id"])
-        except HTTPException as error:
-            failed.append({"id": find["id"], "error": error.detail})
-            break                      # если hh отвалился, дальше смысла нет
-    return {"analyzed": len(done), "failed": failed}
+def analyze_all(limit: int = Query(default=15, ge=1, le=60)):
+    """Разбирает лучшие неразобранные прямо сейчас, не дожидаясь сбора."""
+    import threading
+    threading.Thread(target=runner.analyze_batch, args=(limit,), daemon=True).start()
+    return {"started": True, "limit": limit,
+            "hint": "Разбор идёт в фоне, список обновляется по мере готовности"}
 
 
 class Mark(BaseModel):

@@ -20,10 +20,12 @@ from scout.collector import CollectError, collect
 class State:
     running: bool = False          # включён ли цикл
     busy: bool = False             # идёт ли сбор прямо сейчас
+    stage: str = ""                # что делает сейчас: сбор или разбор
     last_run: str | None = None
     next_run: str | None = None
     last_found: int = 0
     last_fresh: int = 0
+    last_analyzed: int = 0         # сколько разобрал в последнем проходе
     last_error: str | None = None
     interval_minutes: int = 180
     search_url: str = ""
@@ -54,13 +56,22 @@ def scan_once() -> dict:
 
     run_id = store.start_run()
     url = store.get_setting("search_url", "")
-    found, fresh, error = 0, 0, ""
+    found, fresh, error, analyzed = 0, 0, "", 0
     try:
+        with _lock:
+            _state.stage = "сбор"
         items = collect(url)
         found = len(items)
         # Отсеянные остаются в базе, поэтому save_finds их просто не тронет -
         # повторно они в «новые» не попадут
         fresh = store.save_finds(items, query=url)
+
+        # Разбираем сразу: человеку нужен готовый список, а не очередь на 200 кнопок
+        limit = int(store.get_setting("analyze_limit", "15"))
+        if limit:
+            with _lock:
+                _state.stage = "разбор"
+            analyzed = analyze_batch(limit)
     except CollectError as problem:
         error = str(problem)
     except Exception as problem:                       # неожиданное - тоже показываем
@@ -70,6 +81,8 @@ def scan_once() -> dict:
         now = datetime.now()
         with _lock:
             _state.busy = False
+            _state.stage = ""
+            _state.last_analyzed = analyzed
             _state.last_run = now.isoformat(timespec="seconds")
             _state.last_found = found
             _state.last_fresh = fresh
@@ -77,7 +90,29 @@ def scan_once() -> dict:
             if _state.running:
                 minutes = int(store.get_setting("interval_minutes", "180"))
                 _state.next_run = (now + timedelta(minutes=minutes)).isoformat(timespec="seconds")
-    return {"found": found, "fresh": fresh, "error": error or None}
+    return {"found": found, "fresh": fresh, "analyzed": analyzed, "error": error or None}
+
+
+def analyze_batch(limit: int = 15) -> int:
+    """Разбирает лучшие неразобранные находки в одном браузере.
+
+    Список отсортирован по предварительной оценке, поэтому первыми уходят
+    в разбор те, у кого больше шансов. Совсем безнадёжные не открываем:
+    их вердикт понятен по заголовку, а каждая страница стоит секунд.
+    """
+    from scout.analysis import analyze_many          # импорт здесь: избегаем цикла
+
+    batch = [f for f in store.list_finds("new")[:limit * 2]
+             if (f.get("score") or 0) >= 20][:limit]
+    if not batch:
+        return 0
+    try:
+        return analyze_many(batch)
+    except Exception as problem:
+        # Причину надо показать: молчаливый ноль выглядит как «нечего разбирать»
+        with _lock:
+            _state.last_error = str(problem)
+        return 0
 
 
 def _loop() -> None:

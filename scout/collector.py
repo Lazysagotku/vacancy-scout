@@ -56,6 +56,21 @@ class CollectError(RuntimeError):
     """Сбор не удался - чаще всего выключен VPN или слетела сессия."""
 
 
+def hit_vpn_check(page) -> bool:
+    """Не упёрлись ли в заглушку hh про VPN.
+
+    При включённом VPN hh перекидывает карточку вакансии на /vpncheeck.
+    Там две кнопки: повторить и «я не использую VPN». Вторую жать нельзя -
+    это заявление сервису, которое не соответствует действительности,
+    поэтому проверку не обходим, а честно сообщаем наверх.
+    """
+    return "vpncheeck" in page.url
+
+
+class VpnCheck(CollectError):
+    """hh требует пройти проверку VPN - нужен человек."""
+
+
 def collect(search_url: str, pages: int = 2, headless: bool = True) -> list[dict]:
     """Открывает выдачу и снимает карточки. Возвращает список находок."""
     if not search_url.strip():
@@ -139,7 +154,7 @@ def open_login(wait_minutes: int = 10) -> None:
             viewport={"width": 1280, "height": 900},
         )
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto("https://hh.ru/account/login", wait_until="domcontentloaded", timeout=45_000)
+        page.goto("https://hh.ru/", wait_until="domcontentloaded", timeout=45_000)
         deadline = wait_minutes * 60 * 1000
         step = 3000
         waited = 0
@@ -175,3 +190,47 @@ def is_authorized() -> bool:
             return False
         finally:
             context.close()
+
+
+def fetch_descriptions(vacancy_ids: list[str], headless: bool = True) -> dict[str, str]:
+    """Читает описания пачкой в одном браузере.
+
+    Профиль браузера лежит на диске и блокируется при открытии, поэтому
+    поднимать по браузеру на вакансию нельзя - они мешают друг другу
+    и описания приходят пустыми.
+    """
+    from playwright.sync_api import sync_playwright
+
+    result: dict[str, str] = {}
+    if not vacancy_ids:
+        return result
+
+    with sync_playwright() as pw:
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=str(PROFILE), headless=headless,
+            viewport={"width": 1280, "height": 900},
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+        try:
+            for vacancy_id in vacancy_ids:
+                try:
+                    page.goto(f"https://hh.ru/vacancy/{vacancy_id}",
+                              wait_until="domcontentloaded", timeout=45_000)
+                    if hit_vpn_check(page):
+                        raise VpnCheck(
+                            "hh показывает проверку VPN и не отдаёт описания вакансий. "
+                            "Откройте браузер Скаута кнопкой «Войти в hh» и пройдите проверку "
+                            "вручную - после этого сессия запомнится."
+                        )
+                    page.wait_for_selector('[data-qa="vacancy-description"]', timeout=15_000)
+                    result[vacancy_id] = page.evaluate(
+                        "() => document.querySelector('[data-qa=\"vacancy-description\"]')?.innerText || ''"
+                    )
+                except VpnCheck:
+                    raise                        # это про всю пачку, а не про одну вакансию
+                except Exception:
+                    result[vacancy_id] = ""      # одна недоступная не должна рвать пачку
+                page.wait_for_timeout(400)       # вежливость к чужому сайту
+        finally:
+            context.close()
+    return result
