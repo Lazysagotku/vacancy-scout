@@ -192,7 +192,8 @@ def is_authorized() -> bool:
             context.close()
 
 
-def fetch_descriptions(vacancy_ids: list[str], headless: bool = True) -> dict[str, str]:
+def fetch_descriptions(vacancy_ids: list[str], headless: bool = True,
+                       on_progress=None) -> dict[str, str]:
     """Читает описания пачкой в одном браузере.
 
     Профиль браузера лежит на диске и блокируется при открытии, поэтому
@@ -231,6 +232,8 @@ def fetch_descriptions(vacancy_ids: list[str], headless: bool = True) -> dict[st
                 except Exception:
                     result[vacancy_id] = ""      # одна недоступная не должна рвать пачку
                 page.wait_for_timeout(400)       # вежливость к чужому сайту
+                if on_progress:
+                    on_progress(len(result), len(vacancy_ids))
         finally:
             context.close()
     return result

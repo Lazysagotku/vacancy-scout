@@ -119,7 +119,7 @@ def analyze(vacancy_id: str, deep: bool = Query(default=True)):
 
 
 @app.post("/api/finds/analyze-all", tags=["находки"])
-def analyze_all(limit: int = Query(default=15, ge=1, le=60)):
+def analyze_all(limit: int = Query(default=15, ge=1, le=400)):
     """Разбирает лучшие неразобранные прямо сейчас, не дожидаясь сбора."""
     import threading
     threading.Thread(target=runner.analyze_batch, args=(limit,), daemon=True).start()

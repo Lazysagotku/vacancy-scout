@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import re
+
 from scout import profile
 
 # Названия, по которым видно, что роль не наша - без чтения описания
@@ -19,8 +21,6 @@ STOP = [
     ("стажер", "стажировка"),
     ("стажёр", "стажировка"),
     ("intern", "стажировка"),
-    ("junior", "junior-позиция"),
-    ("младший", "junior-позиция"),
     ("1с", "1С-специализация"),
     ("1c", "1С-специализация"),
     ("helpdesk", "первая линия"),
@@ -29,8 +29,6 @@ STOP = [
     ("первая линия", "первая линия"),
     ("1l", "первая линия"),
     ("битрикс", "Битрикс-специализация"),
-    ("devops", "DevOps: пробел Kubernetes и IaC"),
-    ("sre", "SRE: пробел Kubernetes и IaC"),
     ("с выездами", "выездная работа"),
     ("machine learning", "обучение моделей"),
     ("data scientist", "обучение моделей"),
@@ -46,8 +44,24 @@ GOOD = {
     # английские: вакансии часто называют на латинице, иначе они уходят в ноль
     "python": 25, "backend": 20, "c#": 25, ".net": 25, "postgres": 25,
     "support": 25, "engineer": 15, "developer": 18, "llm": 22, "ai": 18,
-    "database": 18, "monitoring": 22, "sql": 18, "devops": 0,
+    "database": 18, "monitoring": 22, "sql": 18,
+    # инфраструктура и безопасность - направление, выбранное 01.09
+    "devops": 25, "sre": 25, "kubernetes": 30, "k8s": 30, "инфраструктур": 25,
+    "linux": 20, "docker": 22, "платформ": 15, "надежност": 22, "облач": 15,
+    "безопасност": 20, "siem": 25, "soc": 20, "кибербез": 25, "security": 20,
 }
+
+# Ключи короче четырёх букв нельзя искать подстрокой: «ии» сидит внутри
+# половины русских слов на «-ии», а «ai» - внутри email. Такие проверяем
+# по границам слова, иначе секретарь набирает баллы за окончание.
+# Плюс слова, которые сидят внутри чужих: intern - в Internal, 1c - в номерах
+SHORT_KEYS = {"ии", "ai", "sre", "soc", "k8s", "c#", "sql", "intern", "1c", "1с", "1l"}
+
+
+def _has(word: str, name: str) -> bool:
+    if len(word) > 3 and word not in SHORT_KEYS:
+        return word in name
+    return re.search(r"(?<![\w#.])" + re.escape(word) + r"(?![\w#])", name) is not None
 
 
 def prescore(item: dict) -> dict:
@@ -56,10 +70,10 @@ def prescore(item: dict) -> dict:
     notes: list[str] = []
 
     for word, reason in STOP:
-        if word in name:
+        if _has(word, name):
             return {"score": 0, "verdict": "пропустить", "notes": reason}
 
-    value = sum(weight for word, weight in GOOD.items() if word in name)
+    value = sum(weight for word, weight in GOOD.items() if _has(word, name))
     value = min(value, 85)                       # потолок: без описания выше не судим
 
     top = item.get("salary_to") or item.get("salary_from")
@@ -72,6 +86,12 @@ def prescore(item: dict) -> dict:
     if item.get("remote"):
         value += 5
         notes.append("удалёнка")
+
+    if any(w in name for w in ("junior", "младший", "джуниор")):
+        # Понижение в зарплате и статусе, но по новому направлению это
+        # осознанный вход - вниз списка, а не в мусор
+        value = max(0, value - 20)
+        notes.append("junior-позиция")
 
     if "Без опыта" in (item.get("experience") or ""):
         value = max(0, value - 15)

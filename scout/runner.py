@@ -102,17 +102,32 @@ def analyze_batch(limit: int = 15) -> int:
     """
     from scout.analysis import analyze_many          # импорт здесь: избегаем цикла
 
-    batch = [f for f in store.list_finds("new")[:limit * 2]
+    batch = [f for f in store.list_finds("new")[:limit * 3]
              if (f.get("score") or 0) >= 20][:limit]
     if not batch:
         return 0
+
+    def progress(done: int, total: int) -> None:
+        with _lock:
+            _state.stage = f"разбор {done} из {total}"
+
     try:
-        return analyze_many(batch)
+        result = analyze_many(batch, on_progress=progress)
+        with _lock:
+            _state.last_analyzed = result
+            # Прошлая ошибка больше не актуальна: раз описания пришли,
+            # держать на виду старую жалобу на VPN - врать человеку
+            if result:
+                _state.last_error = None
+        return result
     except Exception as problem:
         # Причину надо показать: молчаливый ноль выглядит как «нечего разбирать»
         with _lock:
             _state.last_error = str(problem)
         return 0
+    finally:
+        with _lock:
+            _state.stage = ""
 
 
 def _loop() -> None:

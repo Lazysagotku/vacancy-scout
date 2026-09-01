@@ -212,15 +212,19 @@ const post = (path, body) => api(path, {
 async function refreshStatus() {
   const { scout, counts } = await api("/api/status");
   const dot = document.getElementById("dot");
-  dot.className = "dot" + (scout.busy ? " busy" : scout.last_error ? " err" : scout.running ? " on" : "");
+  dot.className = "dot" + ((scout.busy || scout.stage) ? " busy" : scout.last_error ? " err" : scout.running ? " on" : "");
+  // stage приходит с сервера во время долгих операций: «разбор 47 из 215».
+  // Без него разбор на две сотни вакансий выглядит как зависший скаут.
   document.getElementById("stateText").textContent =
-    scout.busy ? "собираю…" : scout.running ? "скаут включён" : "скаут выключен";
+    scout.stage ? scout.stage + "…"
+    : scout.busy ? "собираю…" : scout.running ? "скаут включён" : "скаут выключен";
 
   const when = (v) => v ? v.replace("T", " ").slice(5, 16) : "—";
   document.getElementById("stateNote").textContent =
     "последний сбор " + when(scout.last_run) +
     (scout.running ? ", следующий " + when(scout.next_run) : "") +
-    " · найдено " + scout.last_found + ", новых " + scout.last_fresh;
+    " · найдено " + scout.last_found + ", новых " + scout.last_fresh +
+    (scout.last_analyzed ? ", разобрано " + scout.last_analyzed : "");
 
   document.getElementById("btnToggle").textContent = scout.running ? "Остановить" : "Включить скаут";
   checkAuth();
@@ -239,6 +243,13 @@ async function refreshStatus() {
     '<div><b>' + (counts.analyzed || 0) + '</b><span>разобрано</span></div>' +
     '<div><b>' + (counts.tracked || 0) + '</b><span>уехало в трекер</span></div>' +
     '<div><b>' + (counts.dropped || 0) + '</b><span>отсеяно</span></div>';
+
+  // Те же цифры на самих вкладках: видно, где что лежит, не заглядывая в сводку
+  document.querySelectorAll("#tabs button").forEach(b => {
+    if (!b.dataset.label) b.dataset.label = b.textContent.trim();
+    const n = counts[b.dataset.tab];
+    b.textContent = b.dataset.label + (n ? " · " + n : "");
+  });
 }
 
 function card(v, demo) {

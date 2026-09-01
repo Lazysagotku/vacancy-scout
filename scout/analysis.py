@@ -54,10 +54,18 @@ def analyze_find(vacancy_id: str, deep: bool = True) -> dict:
     return _save(find, description)
 
 
-def analyze_many(finds: list[dict]) -> int:
-    """Разбирает пачку в одном браузере. Возвращает число разобранных."""
+def analyze_many(finds: list[dict], on_progress=None) -> int:
+    """Разбирает пачку в одном браузере. Возвращает число разобранных.
+
+    Пачка на две сотни вакансий идёт минутами, поэтому ход разбора
+    сообщается наверх: человек должен видеть, что работа идёт, а не
+    гадать, завис скаут или нет.
+    """
     todo = [f for f in finds if not (f.get("description") or "")]
-    descriptions = collector.fetch_descriptions([f["id"] for f in todo]) if todo else {}
+    descriptions = (
+        collector.fetch_descriptions([f["id"] for f in todo], on_progress=on_progress)
+        if todo else {}
+    )
 
     done = 0
     for find in finds:
