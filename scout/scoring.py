@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import re
+
 from scout import profile
 from scout.hh import Vacancy
 
@@ -39,13 +41,30 @@ class Verdict:
                 "стоит посмотреть": "maybe", "слабый матч": "weak"}[self.verdict]
 
 
-def detect_track(text: str) -> str | None:
-    low = text.lower()
-    best, best_hits = None, 0
+# Короткие ключи нельзя искать подстрокой: «ии» сидит внутри «организации»
+# и «информации», из-за чего вакансия сопровождения уезжала в ai-трек.
+_SHORT = {"ai", "ии", "l2", "l3", "c#"}
+
+
+def _hit(word: str, text: str) -> bool:
+    if len(word) > 3 and word not in _SHORT:
+        return word in text
+    return re.search(r"(?<![\w#.])" + re.escape(word) + r"(?![\w#])", text) is not None
+
+
+def detect_track(text: str, title: str = "") -> str | None:
+    """Определяет трек по заголовку и описанию.
+
+    Заголовок весит втрое: «Инженер сопровождения» говорит о роли больше,
+    чем случайное упоминание нейросетей в списке технологий.
+    """
+    low, head = text.lower(), (title or "").lower()
+    best, best_score = None, 0
     for track, words in profile.TRACKS.items():
-        hits = sum(1 for w in words if w in low)
-        if hits > best_hits:
-            best, best_hits = track, hits
+        value = sum(1 for w in words if _hit(w, low))
+        value += 3 * sum(1 for w in words if _hit(w, head))
+        if value > best_score:
+            best, best_score = track, value
     return best
 
 
@@ -101,5 +120,5 @@ def score(vacancy: Vacancy) -> Verdict:
         value = max(0, value - 10)
         notes.append("по задачам это первая линия")
 
-    return Verdict(score=value, track=detect_track(text), matched=matched,
+    return Verdict(score=value, track=detect_track(text, vacancy.name), matched=matched,
                    gaps=gaps, blockers=blockers, notes=notes)
