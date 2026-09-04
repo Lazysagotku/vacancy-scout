@@ -144,6 +144,10 @@
 
   details { margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
   summary { cursor: pointer; font-size: 0.88rem; color: var(--muted); }
+  /* Заголовок ведёт на вакансию. Подчёркивание только при наведении,
+     чтобы список не выглядел рябым от синих ссылок. */
+  .title-link { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--line); }
+  .title-link:hover { color: var(--accent-deep); border-bottom-color: var(--accent); }
   .review { margin-top: 0.6rem; background: var(--accent-soft); border: 1px solid var(--line);
             border-left: 3px solid var(--accent); border-radius: 10px; padding: 0.6rem 0.9rem; }
   .review summary { font-size: 0.88rem; font-weight: 700; cursor: pointer; color: var(--accent-deep); }
@@ -284,8 +288,9 @@ function card(v, demo) {
     money = (v.salary_from && v.salary_from !== v.salary_to ? Math.round(v.salary_from/1000) + "-" : "до ")
           + Math.round(top/1000) + "к";
   }
-  // Ссылка на выдачу нужна только пока вакансия не разобрана
-  const showLink = v.url && v.url !== "#" && v.status !== "analyzed" && v.status !== "tracked";
+  // Ссылка нужна на любой стадии: именно с разобранной вакансии идут
+  // откликаться, и искать её на hh по названию компании неудобно.
+  const hasLink = !demo && v.url && v.url !== "#";
 
   let actions = "";
   if (!demo) {
@@ -299,14 +304,17 @@ function card(v, demo) {
   }
 
   return '<article class="card ' + css + '">' +
-    '<div class="card-head"><h3>' + esc(v.name) + ' <span class="who">· ' + esc(v.employer || "") + '</span></h3>' +
+    '<div class="card-head"><h3>' +
+      (hasLink ? '<a class="title-link" href="' + esc(v.url) + '" target="_blank" rel="noopener" title="Открыть на hh">'
+                 + esc(v.name) + '</a>' : esc(v.name)) +
+      ' <span class="who">· ' + esc(v.employer || "") + '</span></h3>' +
       (v.verdict ? '<span class="badge ' + css + '">' + esc(v.verdict) + ' · ' + v.score + '</span>' : "") +
     '</div>' +
     '<div class="meta"><span class="money">' + esc(money) + '</span>' +
       (v.track ? '<span>трек: ' + esc(v.track) + '</span>' : "") +
       (v.experience ? '<span>' + esc(v.experience) + '</span>' : "") +
       (v.remote ? '<span>удалёнка</span>' : "") +
-      (showLink ? '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">открыть вакансию →</a>' : "") +
+      (hasLink ? '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">открыть на hh →</a>' : "") +
     '</div>' +
     (v.score != null ? '<div class="bar"><i style="width:' + v.score + '%"></i></div>' : "") +
     '<div class="why">' +
