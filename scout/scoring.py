@@ -111,6 +111,14 @@ def score(vacancy: Vacancy) -> Verdict:
         value = max(0, value - 20)
         notes.append("роль рассчитана на новичка - риск понижения уровня")
 
+    # Работодатели с автоматическим скринингом на входе
+    employer = (vacancy.employer or "").lower()
+    for word, (weight, reason) in profile.EMPLOYERS.items():
+        if word in employer:
+            value = max(0, value - weight)
+            notes.append(reason)
+            break
+
     # Хелпдеск и работа с железом: стек может совпадать, но это шаг назад
     downgrades = [reason for word, reason in profile.DOWNGRADE.items() if word in low]
     if downgrades:

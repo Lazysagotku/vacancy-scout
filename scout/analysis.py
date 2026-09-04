@@ -58,6 +58,27 @@ def analyze_find(vacancy_id: str, deep: bool = True) -> dict:
     return _save(find, description)
 
 
+def peek_forms(finds: list[dict], limit: int = 8) -> int:
+    """Снимает вопросы формы отклика у самых подходящих находок.
+
+    Открывать форму у каждой вакансии дорого: это отдельная загрузка
+    страницы плюс клик. Поэтому берём только тех, к кому реально пойдёт
+    отклик - у остальных вопросы всё равно не понадобятся.
+    """
+    from scout import response_form
+
+    worth = [f for f in finds
+             if (f.get("score") or 0) >= 60 and not response_form.known(f["id"])]
+    done = 0
+    for find in worth[:limit]:
+        try:
+            response_form.peek(find["id"])
+            done += 1
+        except Exception:
+            break            # сессия отвалилась - дальше смысла нет
+    return done
+
+
 def analyze_many(finds: list[dict], on_progress=None) -> int:
     """Разбирает пачку в одном браузере. Возвращает число разобранных.
 

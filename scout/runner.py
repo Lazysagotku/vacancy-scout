@@ -26,6 +26,7 @@ class State:
     last_found: int = 0
     last_fresh: int = 0
     last_analyzed: int = 0         # сколько разобрал в последнем проходе
+    last_forms: int = 0            # у скольких снял вопросы формы отклика
     last_error: str | None = None
     interval_minutes: int = 180
     search_url: str = ""
@@ -113,7 +114,15 @@ def analyze_batch(limit: int = 15) -> int:
 
     try:
         result = analyze_many(batch, on_progress=progress)
+
+        # Сразу смотрим формы отклика у лучших: вопросы работодателя нужны
+        # до письма, иначе письмо придётся переписывать.
+        from scout.analysis import peek_forms
         with _lock:
+            _state.stage = "разведка форм"
+        forms = peek_forms([f for f in store.list_finds("analyzed")])
+        with _lock:
+            _state.last_forms = forms
             _state.last_analyzed = result
             # Прошлая ошибка больше не актуальна: раз описания пришли,
             # держать на виду старую жалобу на VPN - врать человеку
