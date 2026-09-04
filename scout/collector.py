@@ -185,14 +185,22 @@ def is_authorized() -> bool:
         try:
             page.goto("https://hh.ru/applicant/resumes", wait_until="domcontentloaded", timeout=30_000)
             page.wait_for_timeout(1500)
+            # Куки проверяем до разметки: они не зависят от вёрстки hh,
+            # которая меняется и уносит с собой data-qa атрибуты.
+            names = {c["name"] for c in context.cookies() if "hh.ru" in c.get("domain", "")}
+            if "hhtoken" not in names or "hhrole" not in names:
+                return False
             # По URL судить нельзя: неавторизованного hh уводит и на /account/login,
             # и на /account/signup, а иногда отдаёт страницу резюме с формой входа
             # внутри. Поэтому смотрим на признак живой сессии в самой странице.
             if any(m in page.url for m in ("/account/login", "/account/signup", "/auth")):
                 return False
+            # Разметку профиля hh переделывал: селекторы вроде mainmenu_applicantProfile
+            # больше не находятся даже при живой сессии. Надёжнее смотреть на то,
+            # что видно человеку: кнопки входа нет, а разделы соискателя есть.
             return page.evaluate(
-                "() => !!document.querySelector('[data-qa=\"mainmenu_applicantProfile\"],"
-                " [data-qa=\"resume-list\"], [data-qa=\"mainmenu_myResumes\"]')"
+                "() => !document.querySelector('[data-qa=\"login\"]')"
+                " && /Отклики|Резюме и профиль|Мои резюме/.test(document.body.innerText)"
             )
         except Exception:
             return False

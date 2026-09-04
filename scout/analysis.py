@@ -24,6 +24,10 @@ def _save(find: dict, description: str) -> dict:
         description=description,
     )
     verdict = score(vacancy)
+    # Если форму отклика уже разведывали, письмо собирается с оглядкой
+    # на её вопросы: то, что спросят отдельным полем, в письме не нужно.
+    from scout import response_form
+    form = response_form.known(find["id"])
     store.update_find(
         find["id"],
         status="analyzed",
@@ -34,7 +38,7 @@ def _save(find: dict, description: str) -> dict:
         gaps="; ".join(verdict.gaps),
         blockers="; ".join(verdict.blockers),
         notes="; ".join(verdict.notes),
-        letter=draft(vacancy, verdict),
+        letter=draft(vacancy, verdict, form),
         description=description,
         analyzed_at=datetime.now().isoformat(timespec="seconds"),
     )

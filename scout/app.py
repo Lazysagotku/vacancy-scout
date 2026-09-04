@@ -132,8 +132,17 @@ def peek_form(vacancy_id: str):
     Отклик не отправляется: скрипт доходит до формы, читает поля и уходит.
     """
     from scout import response_form
+    from scout.analysis import analyze_find
     try:
-        return response_form.peek(vacancy_id)
+        data = response_form.peek(vacancy_id)
+        # Письмо переписываем сразу: теперь известно, о чём спросят формой,
+        # и дублировать это в тексте не нужно.
+        if data.get("questions"):
+            try:
+                analyze_find(vacancy_id, deep=False)
+            except Exception:
+                pass          # разбор не критичен, вопросы уже сняты
+        return data
     except collector.CollectError as error:
         raise HTTPException(502, str(error)) from error
 

@@ -123,19 +123,23 @@ def peek(vacancy_id: str, headless: bool = True) -> dict:
         )
         page = context.pages[0] if context.pages else context.new_page()
         try:
-            page.goto(f"https://hh.ru/vacancy/{vacancy_id}",
+            # Прогрев сессии. Без него hh отдаёт страницу вакансии как гостю:
+            # куки в профиле есть, но применяются только после захода в раздел
+            # соискателя. Это же объясняет, почему кнопка входа в интерфейсе
+            # подтверждает авторизацию не сразу, а через несколько секунд.
+            page.goto("https://hh.ru/applicant/resumes",
                       wait_until="domcontentloaded", timeout=45_000)
-            page.wait_for_timeout(1800)
-            if hit_vpn_check(page):
-                raise VpnCheck("hh показывает проверку VPN")
-
-            # Признак входа тот же, что у остального скаута: неавторизованного
-            # hh уводит на страницу логина. Меню профиля на карточке вакансии
-            # отсутствует даже при живой сессии, по нему проверять нельзя.
+            page.wait_for_timeout(2500)
             if any(m in page.url for m in ("/account/login", "/account/signup")):
                 raise CollectError("Нет сессии hh. Нажмите «Войти в hh» и войдите в аккаунт.")
 
-            body = page.evaluate("() => document.body.innerText")
+            page.goto(f"https://hh.ru/vacancy/{vacancy_id}",
+                      wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_timeout(2500)
+            if hit_vpn_check(page):
+                raise VpnCheck("hh показывает проверку VPN")
+
+            body = page.evaluate("() => document.body ? document.body.innerText : ''")
             if re.search(r"вы откликнулись|отклик отправлен", body, re.I):
                 result["note"] = "На эту вакансию уже был отклик"
                 return _remember(result)
@@ -145,29 +149,35 @@ def peek(vacancy_id: str, headless: bool = True) -> dict:
                 result["note"] = "Кнопка отклика не найдена: вакансия могла закрыться"
                 return _remember(result)
 
-            # Переходим по ссылке формы, не кликая: клик может открыть
-            # всплывающее окно с уже нажатой отправкой в некоторых сценариях
-            href = link.get_attribute("href") or ""
-            if href.startswith("/"):
-                href = "https://hh.ru" + href
-            page.goto(href, wait_until="domcontentloaded", timeout=45_000)
-            page.wait_for_timeout(2500)
+            # Кликаем, а не переходим по href: прямой переход теряет контекст
+            # перехода, и hh подсовывает форму регистрации вместо отклика.
+            # Первое нажатие отклик НЕ отправляет - оно открывает форму,
+            # где выбирают резюме и пишут письмо. Проверено на живой вакансии.
+            link.click()
+            page.wait_for_timeout(5000)
 
-            # Форма отклика для неавторизованного превращается в регистрацию:
-            # это самый надёжный признак, что сессии нет.
             if any(m in page.url for m in ("/account/login", "/account/signup")):
-                raise CollectError("hh показал форму регистрации вместо отклика: нужен вход в аккаунт.")
-
+                raise CollectError("hh показал форму регистрации вместо отклика: нужен вход.")
             if hit_vpn_check(page):
                 raise VpnCheck("hh показывает проверку VPN на форме отклика")
+
+            # Страховка: если hh всё же отправил отклик, это надо увидеть сразу
+            after = page.evaluate("() => document.body ? document.body.innerText : ''")
+            if re.search(r"отклик отправлен|резюме отправлено", after, re.I):
+                result["note"] = "ВНИМАНИЕ: hh отправил отклик сам, без второго шага"
+                result["url"] = page.url
+                return _remember(result)
 
             data = page.evaluate(EXTRACT)
             result["questions"] = data.get("questions") or []
             result["has_letter"] = bool(data.get("hasLetter"))
             result["resumes"] = data.get("resumes") or []
             result["url"] = page.url
+            # hh сам говорит в адресе, начиналась ли форма с вопросов
+            result["has_questions_flag"] = "startedWithQuestion=true" in page.url
             if not result["questions"]:
-                result["note"] = "Дополнительных вопросов нет, только резюме и письмо"
+                result["note"] = ("Дополнительных вопросов нет: только выбор резюме "
+                                  "и сопроводительное письмо")
         finally:
             # Форму закрываем, ничего не отправив
             try:

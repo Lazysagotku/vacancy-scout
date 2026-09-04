@@ -28,18 +28,31 @@ CLOSING = ("Мои проекты: https://lazysagotku.github.io\n\n"
            "С уважением,\nИван Архипов")
 
 
-def draft(vacancy: Vacancy, verdict: Verdict) -> str:
-    """Собирает черновик. Для отсеянных вакансий письма нет - незачем."""
+def draft(vacancy: Vacancy, verdict: Verdict, form: dict | None = None) -> str:
+    """Собирает черновик. Для отсеянных вакансий письма нет - незачем.
+
+    Если форма отклика уже разведана и в ней есть вопросы работодателя,
+    письмо строится иначе. Повторять в нём то, что спрошено отдельным
+    полем, незачем: работодатель прочитает ответ дважды, а место в письме
+    уйдёт впустую. Поэтому упомянутые в вопросах темы из письма убираются.
+    """
     if verdict.blockers:
         return ""
 
     track = verdict.track or "support"
     parts = [OPENING.get(track, OPENING["support"]).format(name=vacancy.name.lower())]
 
+    # Темы, которые работодатель спросит отдельным полем формы
+    asked = ""
+    if form and form.get("questions"):
+        asked = " ".join(q.get("question", "") for q in form["questions"]).lower()
+
     if verdict.matched:
-        parts.append("По вашим требованиям:")
-        for name, proof in verdict.matched[:6]:
-            parts.append(f"{name} - {proof}.")
+        shown = [(n, p) for n, p in verdict.matched if n.lower() not in asked]
+        if shown:
+            parts.append("По вашим требованиям:")
+            for name, proof in shown[:6]:
+                parts.append(f"{name} - {proof}.")
 
     if verdict.gaps:
         # Пробел называем один раз и сразу переводим в план. Развёрнутые
@@ -47,6 +60,12 @@ def draft(vacancy: Vacancy, verdict: Verdict) -> str:
         # чем сам пробел.
         parts.append("Из требований пока вне опыта: " + "; ".join(verdict.gaps[:2])
                      + ". Закрываю это на собственном стенде.")
+
+    if asked:
+        # Человеку полезно видеть в черновике, что часть ответов уйдёт
+        # не письмом, а формой - иначе он продублирует их вручную.
+        parts.append("[В форме отклика есть отдельные вопросы работодателя - "
+                     "ответы на них не дублируйте в письме.]")
 
     parts.append(CLOSING)
     return "\n\n".join(parts)
