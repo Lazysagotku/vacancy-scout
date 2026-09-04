@@ -118,6 +118,26 @@ def analyze(vacancy_id: str, deep: bool = Query(default=True)):
         raise HTTPException(502, str(error)) from error
 
 
+@app.get("/api/finds/{vacancy_id}/form", tags=["находки"])
+def get_form(vacancy_id: str):
+    """Отдаёт уже снятые вопросы формы отклика, если они есть."""
+    from scout import response_form
+    return response_form.known(vacancy_id) or {"id": vacancy_id, "questions": [], "note": "не проверялось"}
+
+
+@app.post("/api/finds/{vacancy_id}/form", tags=["находки"])
+def peek_form(vacancy_id: str):
+    """Открывает форму отклика и снимает вопросы работодателя.
+
+    Отклик не отправляется: скрипт доходит до формы, читает поля и уходит.
+    """
+    from scout import response_form
+    try:
+        return response_form.peek(vacancy_id)
+    except collector.CollectError as error:
+        raise HTTPException(502, str(error)) from error
+
+
 @app.post("/api/finds/analyze-all", tags=["находки"])
 def analyze_all(limit: int = Query(default=15, ge=1, le=400)):
     """Разбирает лучшие неразобранные прямо сейчас, не дожидаясь сбора."""

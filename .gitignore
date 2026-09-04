@@ -4,3 +4,4 @@ __pycache__/
 .env
 scout.db
 .browser/
+response_forms.json

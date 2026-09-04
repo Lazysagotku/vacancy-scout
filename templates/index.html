@@ -144,6 +144,16 @@
 
   details { margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
   summary { cursor: pointer; font-size: 0.88rem; color: var(--muted); }
+  .form-q { margin-top: 0.6rem; }
+  .form-q details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.9rem; }
+  .form-q summary { font-size: 0.88rem; font-weight: 600; cursor: pointer; }
+  .form-q .qs { margin: 0.6rem 0 0; padding-left: 1.2rem; font-size: 0.88rem; }
+  .form-q .qs li { margin-bottom: 0.7rem; }
+  .form-q .qs b { display: block; margin-bottom: 0.2rem; font-weight: 600; }
+  .form-q .kind { display: inline-block; font-size: 0.76rem; color: var(--muted); margin-bottom: 0.25rem; }
+  .form-q .qs ul { margin: 0.25rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.85rem; }
+  .form-note { font-size: 0.85rem; color: var(--muted); padding: 0.5rem 0.2rem; }
+  .form-note.err { color: var(--skip); }
   .letter { white-space: pre-wrap; font-size: 0.9rem; background: var(--surface); border-radius: 10px; padding: 0.9rem 1rem; margin-top: 0.6rem; }
   .copy { margin-top: 0.5rem; padding: 0.3rem 0.9rem; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); cursor: pointer; font-size: 0.85rem; }
   .copy:hover { border-color: var(--accent); }
@@ -275,6 +285,7 @@ function card(v, demo) {
   if (!demo) {
     let buttons = "";
     if (v.status === "new") buttons += '<button class="primary" onclick="analyze(\'' + v.id + '\', this)">Разобрать</button>';
+    if (v.status === "analyzed") buttons += '<button onclick="peekForm(\'' + v.id + '\', this)">Вопросы работодателя</button>';
     if (v.status === "analyzed") buttons += '<button class="primary" onclick="mark(\'' + v.id + '\', \'sent\')">Отклик отправлен → в трекер</button>';
     if (v.status === "dropped") buttons += '<button onclick="mark(\'' + v.id + '\', \'new\')">Вернуть в список</button>';
     else if (v.status !== "tracked") buttons += '<button onclick="mark(\'' + v.id + '\', \'dropped\')">Не интересно</button>';
@@ -299,6 +310,7 @@ function card(v, demo) {
       (v.notes ? '<div><span class="k">внимание</span><span class="warn">' + esc(v.notes) + '</span></div>' : "") +
       (v.drop_reason ? '<div><span class="k">отсеяна</span><span class="warn">' + esc(v.drop_reason) + '</span></div>' : "") +
     '</div>' +
+    '<div class="form-q" id="q' + esc(v.id) + '"></div>' +
     (v.letter ? '<details><summary>Черновик сопроводительного</summary><div class="letter" id="l' + esc(v.id) + '">' + esc(v.letter) + '</div><button class="copy" type="button" onclick="copyLetter(\'l' + esc(v.id) + '\', this)">Скопировать</button></details>' : "") +
     actions +
   '</article>';
@@ -326,6 +338,49 @@ async function load() {
   } catch (error) {
     list.innerHTML = '<div class="empty">Ошибка: ' + esc(error.message) + '</div>';
   }
+}
+
+// Открывает форму отклика на hh и снимает вопросы работодателя.
+// Отклик при этом не отправляется: скрипт доходит до формы и уходит.
+async function peekForm(id, button) {
+  const box = document.getElementById("q" + id);
+  const was = button.textContent;
+  button.disabled = true;
+  button.textContent = "Смотрю форму...";
+  try {
+    const res = await fetch("/api/finds/" + id + "/form", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "не вышло");
+    renderForm(box, data);
+  } catch (e) {
+    box.innerHTML = '<div class="form-note err">' + esc(e.message) + '</div>';
+  } finally {
+    button.disabled = false;
+    button.textContent = was;
+  }
+}
+
+function renderForm(box, data) {
+  if (!data) return;
+  const list = data.questions || [];
+  if (!list.length) {
+    box.innerHTML = '<div class="form-note">' + esc(data.note || "Вопросов нет") + '</div>';
+    return;
+  }
+  const qs = list.map((q, i) => {
+    const opts = (q.options || []).length
+      ? '<ul>' + q.options.map(o => '<li>' + esc(o) + '</li>').join("") + '</ul>'
+      : '';
+    const kind = q.kind === "checkbox" ? "несколько вариантов"
+               : q.kind === "radio" ? "один вариант" : "свободный ответ";
+    return '<li><b>' + (i + 1) + '. ' + esc(q.question) + '</b>'
+         + '<span class="kind">' + kind + (q.required ? " · обязательный" : "") + '</span>'
+         + opts + '</li>';
+  }).join("");
+  box.innerHTML = '<details open><summary>Вопросы работодателя: ' + list.length
+    + '</summary><ol class="qs">' + qs + '</ol>'
+    + (data.has_letter ? '<div class="form-note">Есть поле сопроводительного письма</div>' : '')
+    + '</details>';
 }
 
 async function analyze(id, button) {
