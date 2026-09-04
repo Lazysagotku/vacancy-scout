@@ -19,6 +19,10 @@ from scout.letter import draft
 from scout.scoring import score
 
 app = FastAPI(title="Разведчик вакансий", version="2.0.0")
+
+from scout.auth import BasicAuth
+
+app.add_middleware(BasicAuth)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
