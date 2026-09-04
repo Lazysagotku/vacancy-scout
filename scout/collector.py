@@ -184,8 +184,16 @@ def is_authorized() -> bool:
         page = context.pages[0] if context.pages else context.new_page()
         try:
             page.goto("https://hh.ru/applicant/resumes", wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_timeout(1200)
-            return "/account/login" not in page.url
+            page.wait_for_timeout(1500)
+            # По URL судить нельзя: неавторизованного hh уводит и на /account/login,
+            # и на /account/signup, а иногда отдаёт страницу резюме с формой входа
+            # внутри. Поэтому смотрим на признак живой сессии в самой странице.
+            if any(m in page.url for m in ("/account/login", "/account/signup", "/auth")):
+                return False
+            return page.evaluate(
+                "() => !!document.querySelector('[data-qa=\"mainmenu_applicantProfile\"],"
+                " [data-qa=\"resume-list\"], [data-qa=\"mainmenu_myResumes\"]')"
+            )
         except Exception:
             return False
         finally:

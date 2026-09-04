@@ -129,7 +129,10 @@ def peek(vacancy_id: str, headless: bool = True) -> dict:
             if hit_vpn_check(page):
                 raise VpnCheck("hh показывает проверку VPN")
 
-            if not page.evaluate('() => !!document.querySelector(\'[data-qa="mainmenu_applicantProfile"]\')'):
+            # Признак входа тот же, что у остального скаута: неавторизованного
+            # hh уводит на страницу логина. Меню профиля на карточке вакансии
+            # отсутствует даже при живой сессии, по нему проверять нельзя.
+            if any(m in page.url for m in ("/account/login", "/account/signup")):
                 raise CollectError("Нет сессии hh. Нажмите «Войти в hh» и войдите в аккаунт.")
 
             body = page.evaluate("() => document.body.innerText")
@@ -149,6 +152,11 @@ def peek(vacancy_id: str, headless: bool = True) -> dict:
                 href = "https://hh.ru" + href
             page.goto(href, wait_until="domcontentloaded", timeout=45_000)
             page.wait_for_timeout(2500)
+
+            # Форма отклика для неавторизованного превращается в регистрацию:
+            # это самый надёжный признак, что сессии нет.
+            if any(m in page.url for m in ("/account/login", "/account/signup")):
+                raise CollectError("hh показал форму регистрации вместо отклика: нужен вход в аккаунт.")
 
             if hit_vpn_check(page):
                 raise VpnCheck("hh показывает проверку VPN на форме отклика")
