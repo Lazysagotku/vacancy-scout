@@ -144,6 +144,12 @@
 
   details { margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
   summary { cursor: pointer; font-size: 0.88rem; color: var(--muted); }
+  .review { margin-top: 0.6rem; background: var(--accent-soft); border: 1px solid var(--line);
+            border-left: 3px solid var(--accent); border-radius: 10px; padding: 0.6rem 0.9rem; }
+  .review summary { font-size: 0.88rem; font-weight: 700; cursor: pointer; color: var(--accent-deep); }
+  .review div { white-space: pre-wrap; font-size: 0.88rem; line-height: 1.55; margin-top: 0.5rem; }
+  .review.answers { background: var(--surface); border-left-color: var(--strong-ink); }
+  .review.answers summary { color: var(--strong-ink); }
   .form-q { margin-top: 0.6rem; }
   .form-q details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.9rem; }
   .form-q summary { font-size: 0.88rem; font-weight: 600; cursor: pointer; }
@@ -310,6 +316,8 @@ function card(v, demo) {
       (v.notes ? '<div><span class="k">внимание</span><span class="warn">' + esc(v.notes) + '</span></div>' : "") +
       (v.drop_reason ? '<div><span class="k">отсеяна</span><span class="warn">' + esc(v.drop_reason) + '</span></div>' : "") +
     '</div>' +
+    (v.review ? '<details class="review" open><summary>Разбор</summary><div>' + esc(v.review) + '</div></details>' : "") +
+    (v.form_answers ? '<details class="review answers"><summary>Ответы на вопросы формы</summary><div>' + esc(v.form_answers) + '</div></details>' : "") +
     '<div class="form-q" id="q' + esc(v.id) + '"></div>' +
     (v.letter ? '<details><summary>Черновик сопроводительного</summary><div class="letter" id="l' + esc(v.id) + '">' + esc(v.letter) + '</div><button class="copy" type="button" onclick="copyLetter(\'l' + esc(v.id) + '\', this)">Скопировать</button></details>' : "") +
     actions +
