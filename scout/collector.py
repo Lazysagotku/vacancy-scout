@@ -34,15 +34,34 @@ EXTRACT = r"""
       if (card.textContent.length > 200) break;
     }
     const txt = (card.innerText || "").replace(/\s+/g, " ").trim();
-    const money = [...txt.matchAll(/(\d[\d\s]{4,})\s*₽/g)].map(m => parseInt(m[1].replace(/\s/g, "")));
+    // Предлог решает всё: «от 150 000» и «до 150 000» - разные вилки, но
+    // цифра одна. Раньше брались просто min и max по всем суммам, и
+    // одиночное «от 150 000» превращалось в «до 150к».
+    const num = (s) => parseInt(s.replace(/\s/g, ""));
+    const mFrom = txt.match(/от\s*(\d[\d\s]{4,})\s*₽/i);
+    const mTo   = txt.match(/до\s*(\d[\d\s]{4,})\s*₽/i);
+    const mRange = txt.match(/(\d[\d\s]{4,})\s*[–—-]\s*(\d[\d\s]{4,})\s*₽/);
+    const money = [...txt.matchAll(/(\d[\d\s]{4,})\s*₽/g)].map(m => num(m[1]));
+
+    let payFrom = null, payTo = null;
+    if (mRange) {                    // «150 000 – 200 000 ₽»
+      payFrom = num(mRange[1]);
+      payTo = num(mRange[2]);
+    } else if (mFrom || mTo) {       // «от 150 000 ₽» либо «до 200 000 ₽»
+      payFrom = mFrom ? num(mFrom[1]) : null;
+      payTo = mTo ? num(mTo[1]) : null;
+    } else if (money.length) {       // «150 000 ₽» без предлога - точная сумма
+      payFrom = Math.min(...money);
+      payTo = Math.max(...money);
+    }
     const emp = txt.match(/(?:Опыт[^А-Я]*|Без опыта\s*)(?:Можно удалённо\s*)?([А-ЯA-Za-z][^•]{1,40})/);
     items.push({
       id,
       name: a.textContent.trim(),
       url: "https://hh.ru/vacancy/" + id,
       employer: emp ? emp[1].trim() : "",
-      salary_from: money.length ? Math.min(...money) : null,
-      salary_to: money.length ? Math.max(...money) : null,
+      salary_from: payFrom,
+      salary_to: payTo,
       experience: (txt.match(/Без опыта|Опыт \d[^А-Я]*/) || [""])[0].trim(),
       remote: /Можно удалённо/.test(txt),
     });

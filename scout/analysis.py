@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from scout import collector, store
+from scout import collector, profile, store
 from scout.hh import Vacancy
 from scout.letter import draft
 from scout.scoring import score
@@ -39,6 +39,7 @@ def _save(find: dict, description: str) -> dict:
         blockers="; ".join(verdict.blockers),
         notes="; ".join(verdict.notes),
         letter=draft(vacancy, verdict, form),
+        resume=profile.resume_for(verdict.track, find.get("name", "") + " " + description),
         description=description,
         analyzed_at=datetime.now().isoformat(timespec="seconds"),
     )
