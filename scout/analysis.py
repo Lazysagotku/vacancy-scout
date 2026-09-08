@@ -39,7 +39,7 @@ def _save(find: dict, description: str) -> dict:
         blockers="; ".join(verdict.blockers),
         notes="; ".join(verdict.notes),
         letter=draft(vacancy, verdict, form),
-        resume=profile.resume_for(verdict.track, find.get("name", "") + " " + description),
+        resume=profile.resume_for(verdict.track, find.get("name", ""), description),
         description=description,
         analyzed_at=datetime.now().isoformat(timespec="seconds"),
     )
