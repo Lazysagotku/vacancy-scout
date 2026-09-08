@@ -97,11 +97,19 @@ def _themes_for(matched: list[tuple[str, str]], text: str) -> list[str]:
     """
     names = " ".join(name.lower() for name, _ in matched)
     low = text.lower()
-    picked = []
+
+    # Тему берём, если она есть в совпадениях ИЛИ если вакансия сама про неё
+    # говорит. Порог по тексту снижен до одного упоминания: раньше стояло три,
+    # и письмо на вакансию про Linux с Grafana выходило без абзаца про
+    # инфраструктуру, потому что каждое слово встречалось по разу.
+    scored = []
     for title, keys, block in THEMES:
-        if any(k in names for k in keys) or sum(low.count(k) for k in keys) >= 3:
-            picked.append(block)
-    return picked[:4]
+        weight = sum(3 for k in keys if k in names) + sum(low.count(k) for k in keys)
+        if weight:
+            scored.append((weight, block))
+
+    scored.sort(key=lambda pair: -pair[0])
+    return [block for _, block in scored[:4]]
 
 
 def draft(vacancy: Vacancy, verdict: Verdict, form: dict | None = None) -> str:
@@ -115,7 +123,10 @@ def draft(vacancy: Vacancy, verdict: Verdict, form: dict | None = None) -> str:
         return ""
 
     track = verdict.track or "support"
-    parts = [OPENING.get(track, OPENING["support"]).format(name=vacancy.name.lower())]
+    # Название берём как есть: lower() портил аббревиатуры и превращал
+    # «L2 (Middle/Linux)» в «l2 (middle/linux)» - в письме это выглядит
+    # неряшливо, будто текст собран машиной.
+    parts = [OPENING.get(track, OPENING["support"]).format(name=vacancy.name.strip())]
 
     # Темы из формы не вычёркиваем: лишний раз сказать о сильной стороне
     # полезнее, чем сэкономить абзац. Решение Ивана 05.09.

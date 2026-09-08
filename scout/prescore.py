@@ -84,7 +84,11 @@ def prescore(item: dict) -> dict:
 
     top = item.get("salary_to") or item.get("salary_from")
     if top and top < profile.SALARY_FLOOR:
-        value = max(0, value - 25)
+        # Штраф пропорционален отрыву от планки, а не фиксирован. Плоские -25
+        # выбивали профильную вакансию из разбора одинаково и при 155к,
+        # и при 90к - хотя первая интересна, а вторая нет.
+        gap = (profile.SALARY_FLOOR - top) / profile.SALARY_FLOOR
+        value = max(0, value - round(35 * gap))
         notes.append(f"вилка ниже планки: {top // 1000}к")
     elif not top:
         notes.append("вилка не указана")
