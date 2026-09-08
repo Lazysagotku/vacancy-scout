@@ -148,6 +148,7 @@
      чтобы список не выглядел рябым от синих ссылок. */
   /* Какое резюме прикладывать - выделяем, это решение перед откликом */
   .meta .resume { background: var(--strong-bg); color: var(--strong-ink); font-weight: 600; }
+  .meta .ready { background: var(--maybe-bg); color: var(--maybe-ink); font-weight: 600; }
   .title-link { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--line); }
   .title-link:hover { color: var(--accent-deep); border-bottom-color: var(--accent); }
   .review { margin-top: 0.6rem; background: var(--accent-soft); border: 1px solid var(--line);
@@ -272,8 +273,8 @@ async function refreshStatus() {
 
   document.getElementById("summary").innerHTML =
     '<div><b>' + (counts.total || 0) + '</b><span>всего находок</span></div>' +
-    '<div><b>' + (counts.new || 0) + '</b><span>ждут разбора</span></div>' +
-    '<div><b>' + (counts.analyzed || 0) + '</b><span>разобрано</span></div>' +
+    '<div><b>' + (counts.new || 0) + '</b><span>в очереди</span></div>' +
+    '<div><b>' + (counts.analyzed || 0) + '</b><span>разобрано мной</span></div>' +
     '<div><b>' + (counts.tracked || 0) + '</b><span>уехало в трекер</span></div>' +
     '<div><b>' + (counts.dropped || 0) + '</b><span>отсеяно</span></div>';
 
@@ -325,6 +326,8 @@ function card(v, demo) {
     '<div class="meta"><span class="money">' + esc(money) + '</span>' +
       (v.track ? '<span>трек: ' + esc(v.track) + '</span>' : "") +
       (v.resume ? '<span class="resume">резюме: ' + esc(v.resume) + '</span>' : "") +
+      // Описание уже загружено - разбор пойдёт без похода на hh
+      (v.status === "new" && v.description ? '<span class="ready">описание есть</span>' : "") +
       (v.experience ? '<span>' + esc(v.experience) + '</span>' : "") +
       (v.remote ? '<span>удалёнка</span>' : "") +
       (hasLink ? '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">открыть на hh →</a>' : "") +
