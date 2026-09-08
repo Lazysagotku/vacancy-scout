@@ -122,6 +122,20 @@ def analyze(vacancy_id: str, deep: bool = Query(default=True)):
         raise HTTPException(502, str(error)) from error
 
 
+@app.get("/api/finds/{vacancy_id}/brief", tags=["находки"])
+def get_brief(vacancy_id: str):
+    """Материал для письма: разделы вакансии, зацепки, требования.
+
+    Письмо по этому материалу пишет человек. Шаблонная сборка из списка
+    навыков давала одинаковые письма, потому что теряла сам текст вакансии.
+    """
+    from scout import brief
+    items = [f for f in store.list_finds() if f["id"] == vacancy_id]
+    if not items:
+        raise HTTPException(404, "Находка не найдена")
+    return {"text": brief.as_text(items[0]), **brief.build(items[0])}
+
+
 @app.get("/api/finds/{vacancy_id}/form", tags=["находки"])
 def get_form(vacancy_id: str):
     """Отдаёт уже снятые вопросы формы отклика, если они есть."""

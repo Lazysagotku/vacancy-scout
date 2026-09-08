@@ -156,6 +156,11 @@
   .review div { white-space: pre-wrap; font-size: 0.88rem; line-height: 1.55; margin-top: 0.5rem; }
   .review.answers { background: var(--surface); border-left-color: var(--strong-ink); }
   .review.answers summary { color: var(--strong-ink); }
+  /* Материал для письма: моноширинный, чтобы разделы читались списком */
+  .brief { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.9rem; }
+  .brief summary { font-size: 0.88rem; font-weight: 700; cursor: pointer; color: var(--accent-deep); }
+  .brief pre { white-space: pre-wrap; font-size: 0.83rem; line-height: 1.5; margin: 0.6rem 0 0;
+               font-family: var(--mono, "Consolas", monospace); max-height: 30rem; overflow-y: auto; }
   .form-q { margin-top: 0.6rem; }
   .form-q details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.9rem; }
   .form-q summary { font-size: 0.88rem; font-weight: 600; cursor: pointer; }
@@ -302,6 +307,7 @@ function card(v, demo) {
   if (!demo) {
     let buttons = "";
     if (v.status === "new") buttons += '<button class="primary" onclick="analyze(\'' + v.id + '\', this)">Разобрать</button>';
+    if (v.status === "analyzed") buttons += '<button onclick="showBrief(\'' + v.id + '\', this)">Материал для письма</button>';
     if (v.status === "analyzed") buttons += '<button onclick="peekForm(\'' + v.id + '\', this)">Вопросы работодателя</button>';
     if (v.status === "analyzed") buttons += '<button class="primary" onclick="mark(\'' + v.id + '\', \'sent\')">Отклик отправлен → в трекер</button>';
     if (v.status === "dropped") buttons += '<button onclick="mark(\'' + v.id + '\', \'new\')">Вернуть в список</button>';
@@ -333,6 +339,7 @@ function card(v, demo) {
     '</div>' +
     (v.review ? '<details class="review" open><summary>Разбор</summary><div>' + esc(v.review) + '</div></details>' : "") +
     (v.form_answers ? '<details class="review answers"><summary>Ответы на вопросы формы</summary><div>' + esc(v.form_answers) + '</div></details>' : "") +
+    '<div class="form-q" id="b' + esc(v.id) + '"></div>' +
     '<div class="form-q" id="q' + esc(v.id) + '"></div>' +
     (v.letter ? '<details><summary>Черновик сопроводительного</summary><div class="letter" id="l' + esc(v.id) + '">' + esc(v.letter) + '</div><button class="copy" type="button" onclick="copyLetter(\'l' + esc(v.id) + '\', this)">Скопировать</button></details>' : "") +
     actions +
@@ -361,6 +368,39 @@ async function load() {
   } catch (error) {
     list.innerHTML = '<div class="empty">Ошибка: ' + esc(error.message) + '</div>';
   }
+}
+
+// Материал для письма: вакансия целиком, разложенная по разделам.
+// Нужен, потому что письмо пишется по тексту вакансии, а не по списку
+// совпавших слов - иначе все письма выходят одинаковыми.
+async function showBrief(id, button) {
+  const box = document.getElementById("b" + id);
+  if (box.innerHTML) { box.innerHTML = ""; return; }   // повторное нажатие сворачивает
+  const was = button.textContent;
+  button.disabled = true;
+  button.textContent = "Собираю…";
+  try {
+    const res = await fetch("/api/finds/" + id + "/brief");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "не вышло");
+    box.innerHTML = '<details class="brief" open><summary>Материал для письма</summary>'
+      + '<pre>' + esc(data.text || "") + '</pre>'
+      + '<button class="copy" type="button" onclick="copyBrief(this)">Скопировать</button>'
+      + '</details>';
+  } catch (e) {
+    box.innerHTML = '<div class="form-note err">' + esc(e.message) + '</div>';
+  } finally {
+    button.disabled = false;
+    button.textContent = was;
+  }
+}
+
+function copyBrief(btn) {
+  const text = btn.parentElement.querySelector("pre").textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = "Скопировано";
+    setTimeout(() => { btn.textContent = "Скопировать"; }, 1500);
+  });
 }
 
 // Открывает форму отклика на hh и снимает вопросы работодателя.

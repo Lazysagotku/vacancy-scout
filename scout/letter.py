@@ -117,24 +117,14 @@ def draft(vacancy: Vacancy, verdict: Verdict, form: dict | None = None) -> str:
     track = verdict.track or "support"
     parts = [OPENING.get(track, OPENING["support"]).format(name=vacancy.name.lower())]
 
-    asked = ""
-    if form and form.get("questions"):
-        asked = " ".join(q.get("question", "") for q in form["questions"]).lower()
-
-    blocks = _themes_for(verdict.matched, vacancy.haystack)
-    if asked:
-        # Тему, о которой спросят формой, в письме не повторяем
-        blocks = [b for b in blocks if not any(w in asked for w in b.lower().split()[:4])]
-    parts.extend(blocks)
+    # Темы из формы не вычёркиваем: лишний раз сказать о сильной стороне
+    # полезнее, чем сэкономить абзац. Решение Ивана 05.09.
+    parts.extend(_themes_for(verdict.matched, vacancy.haystack))
 
     if verdict.gaps:
         # Одна строка без извинений: пробел называется и сразу закрывается планом
         parts.append("Из требований вне опыта: " + "; ".join(verdict.gaps[:2])
                      + ". Закрываю это на собственном стенде.")
-
-    if asked:
-        parts.append("[В форме отклика есть отдельные вопросы работодателя - "
-                     "ответы на них не дублируйте в письме.]")
 
     parts.append(CLOSING)
     return "\n\n".join(parts)
