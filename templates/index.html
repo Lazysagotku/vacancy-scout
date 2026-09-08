@@ -316,7 +316,7 @@ function card(v, demo) {
     actions = '<div class="row-actions">' + buttons + '</div>';
   }
 
-  return '<article class="card ' + css + '">' +
+  return '<article class="card ' + css + '" data-card="' + esc(v.id) + '">' +
     '<div class="card-head"><h3>' +
       (hasLink ? '<a class="title-link" href="' + esc(v.url) + '" target="_blank" rel="noopener" title="Открыть на hh">'
                  + esc(v.name) + '</a>' : esc(v.name)) +
@@ -472,7 +472,22 @@ async function mark(id, status) {
   }
   try {
     await post("/api/finds/" + id + "/status", { status, reason });
-    await load();
+    // Убираем одну карточку вместо перезагрузки списка: полная
+    // перерисовка схлопывала страницу и уносила прокрутку наверх,
+    // а найти место, где остановился, потом трудно.
+    const card = document.querySelector('[data-card="' + CSS.escape(id) + '"]');
+    if (card) {
+      card.style.transition = "opacity 0.25s, transform 0.25s";
+      card.style.opacity = "0";
+      card.style.transform = "translateX(2rem)";
+      setTimeout(() => {
+        card.remove();
+        const list = document.getElementById("list");
+        if (!list.querySelector(".card")) load();   // список опустел - перерисовать
+      }, 250);
+    } else {
+      await load();
+    }
     await refreshStatus();
   } catch (error) {
     alert(error.message);
