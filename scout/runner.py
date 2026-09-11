@@ -61,11 +61,22 @@ def scan_once() -> dict:
     try:
         with _lock:
             _state.stage = "сбор"
-        items = collect(url)
+        # Ссылок может быть несколько, по одной на строку. Подборка hh «по резюме» -
+        # рекомендательная выдача, и она пропускала вакансии, которые Иван находил
+        # обычным поиском по словам (11.09: восемь вакансий, ни одной в базе).
+        # Поэтому рядом с подборкой идут поисковые запросы по ключевым словам.
+        seen: dict[str, dict] = {}
+        for line in url.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            for item in collect(line):
+                seen.setdefault(item["id"], item)
+        items = list(seen.values())
         found = len(items)
         # Отсеянные остаются в базе, поэтому save_finds их просто не тронет -
         # повторно они в «новые» не попадут
-        fresh = store.save_finds(items, query=url)
+        fresh = store.save_finds(items, query=url.splitlines()[0].strip() if url.strip() else "")
 
         # Разбираем сразу: человеку нужен готовый список, а не очередь на 200 кнопок
         limit = int(store.get_setting("analyze_limit", "15"))
