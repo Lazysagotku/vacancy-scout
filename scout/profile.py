@@ -167,14 +167,46 @@ EMPLOYERS = {
 }
 
 
-# Какое из резюме прикладывать. Решает трек и содержание вакансии:
-# на инфраструктуру идёт сопровожденец, на код - разработчик,
-# на агентов и автоматизацию - питонист.
+# Какое из трёх резюме на hh прикладывать. Названия - как на hh, один в один.
+# На инфраструктуру идёт сопровожденец, на код - разработчик под конкретный
+# язык. Общего «C# / Python» больше нет: такое резюме на hh не существует,
+# а вакансия почти всегда называет стек.
 RESUMES = {
     "support": "Специалист сопровождения систем",
-    "dev": "Разработчик C# / Python",
-    "ai": "Python-разработчик / автоматизация",
+    "csharp": "C#/.NET-разработчик",
+    "python": "Python-разработчик",
 }
+
+CSHARP_WORDS = ("c#", ".net", "asp.net", "dotnet", "entity framework", "ef core",
+                "wpf", "winforms", "blazor", "xamarin", "си шарп")
+PYTHON_WORDS = ("python", "питон", "django", "flask", "fastapi", "aiohttp",
+                "sqlalchemy", "celery", "pydantic")
+
+DEV_ROLE_WORDS = ("разработчик", "программист", "developer", "backend", "бэкенд", "engineer")
+
+
+def dev_lang(title: str = "", description: str = "") -> str | None:
+    """Какой язык у вакансии разработчика: csharp, python или неясно.
+
+    Сначала заголовок - он однозначен. Если там оба языка или ни одного,
+    считаем упоминания в описании: чей стек перечислен подробнее, тот и
+    главный. Ничья - None, дальше решает вызывающий код.
+    """
+    head = (title or "").lower()
+    body = (description or "").lower()
+    cs_head = any(w in head for w in CSHARP_WORDS)
+    py_head = any(w in head for w in PYTHON_WORDS)
+    if cs_head and not py_head:
+        return "csharp"
+    if py_head and not cs_head:
+        return "python"
+    cs = sum(body.count(w) for w in CSHARP_WORDS)
+    py = sum(body.count(w) for w in PYTHON_WORDS)
+    if cs > py:
+        return "csharp"
+    if py > cs:
+        return "python"
+    return None
 
 
 def resume_for(track: str | None, title: str = "", description: str = "") -> str:
@@ -189,8 +221,10 @@ def resume_for(track: str | None, title: str = "", description: str = "") -> str
     body = (description or "").lower()
 
     # 1. Заголовок называет роль прямо
-    if any(w in head for w in ("разработчик", "программист", "developer", "backend", "бэкенд")):
-        return RESUMES["ai"] if any(w in head for w in ("python", "ai", "llm")) else RESUMES["dev"]
+    if any(w in head for w in DEV_ROLE_WORDS) and not any(
+            w in head for w in ("devops", "sre", "поддержк", "сопровожден", "эксплуатац")):
+        # C# по умолчанию: он основной на последнем месте, Python - инструмент автоматизации
+        return RESUMES[dev_lang(title, description) or "csharp"]
     if any(w in head for w in ("devops", "sre", "инфраструктур", "администратор",
                                "сопровожден", "поддержк", "эксплуатац", "мониторинг")):
         return RESUMES["support"]
@@ -201,9 +235,13 @@ def resume_for(track: str | None, title: str = "", description: str = "") -> str
                                         "мониторинг", "сопровожден", "эксплуатац"))
     ai = sum(body.count(w) for w in ("llm", "ai-агент", "нейросет", "промпт"))
     if ai >= 3 and ai > infra:
-        return RESUMES["ai"]
+        return RESUMES["python"]
     if infra >= 3:
         return RESUMES["support"]
 
     # 3. Ничего явного - доверяем треку из скоринга
-    return RESUMES.get(track or "support", RESUMES["support"])
+    if track == "dev":
+        return RESUMES[dev_lang(title, description) or "csharp"]
+    if track == "ai":
+        return RESUMES["python"]
+    return RESUMES["support"]
