@@ -172,6 +172,7 @@
   .form-q .qs ul { margin: 0.25rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.85rem; }
   .form-note { font-size: 0.85rem; color: var(--muted); padding: 0.5rem 0.2rem; }
   .form-note.err { color: var(--skip); }
+  .banner.note { background: var(--accent-soft); color: var(--ink); border-color: var(--line); }
   .kind { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.5rem; margin-left: 0.4rem; vertical-align: middle; }
   .kind-claude { color: var(--accent-deep); border-color: var(--accent); }
   .letter { white-space: pre-wrap; font-size: 0.9rem; background: var(--surface); border-radius: 10px; padding: 0.9rem 1rem; margin-top: 0.6rem; }
@@ -212,7 +213,12 @@
       </label>
       <button id="btnSave" type="button" class="ghost">Сохранить</button>
     </div>
+    <div class="ctl-row">
+      <input id="addUrl" type="text" placeholder="Нашёл вакансию сам? Вставь ссылку с hh - разведчик откроет, оценит и напишет письмо" style="flex:1;font:inherit;font-size:.85rem">
+      <button id="btnAdd" type="button" class="ghost">Добавить</button>
+    </div>
     <div class="banner" id="banner" hidden></div>
+    <div class="banner note" id="noteBanner" hidden></div>
   </section>
 
   <div class="tabs" id="tabs">
@@ -264,9 +270,14 @@ async function refreshStatus() {
 
   document.getElementById("btnToggle").textContent = scout.running ? "Остановить" : "Включить скаут";
   checkAuth();
+  // Ошибка - одной строкой, что случилось и что делать. Простыня из
+  // Playwright пугает и выглядит как «всё сломалось» (Иван 12.09).
   const banner = document.getElementById("banner");
   banner.hidden = !scout.last_error;
-  if (scout.last_error) banner.textContent = scout.last_error + " (чаще всего это выключенный VPN)";
+  if (scout.last_error) banner.textContent = scout.last_error;
+  const note = document.getElementById("noteBanner");
+  note.hidden = !scout.last_note;
+  if (scout.last_note) note.textContent = scout.last_note;
 
   const urlField = document.getElementById("searchUrl");
   if (document.activeElement !== urlField) urlField.value = scout.search_url || "";
@@ -330,19 +341,25 @@ function card(v, demo) {
       (v.resume ? '<span class="resume">резюме: ' + esc(v.resume) + '</span>' : "") +
       // Описание уже загружено - разбор пойдёт без похода на hh
       (v.status === "new" && v.description ? '<span class="ready">описание есть</span>' : "") +
-      (v.experience ? '<span>' + esc(v.experience) + '</span>' : "") +
-      (v.remote ? '<span>удалёнка</span>' : "") +
+      (v.experience ? '<span>опыт ' + esc(v.experience) + '</span>' : "") +
+      // Шапка со страницы hh: оформление, график, формат - то, что Иван
+      // смотрит первым делом. Пока страница не открыта - только «удалёнка» из выдачи.
+      (v.hiring ? '<span>' + esc(v.hiring) + '</span>' : "") +
+      (v.schedule ? '<span>' + esc(v.schedule) + (v.hours ? ", " + esc(v.hours) + " ч" : "") + '</span>' : "") +
+      (v.work_format ? '<span>' + esc(v.work_format) + '</span>' : (v.remote ? '<span>удалёнка</span>' : "")) +
+      (v.employer_rating ? '<span title="рейтинг работодателя на hh">★ ' + esc(v.employer_rating) + (v.employer_reviews ? ' · ' + esc(v.employer_reviews) + ' отз.' : '') + '</span>' : "") +
       (hasLink ? '<a href="' + esc(v.url) + '" target="_blank" rel="noopener">открыть на hh →</a>' : "") +
     '</div>' +
     (v.score != null ? '<div class="bar"><i style="width:' + v.score + '%"></i></div>' : "") +
     '<div class="why">' +
       (v.blockers ? '<div><span class="k">блокеры</span><span class="warn">' + esc(v.blockers) + '</span></div>' : "") +
       (v.matched ? '<div><span class="k">совпало</span><span>' + v.matched.split(", ").map(m => '<span class="chip">' + esc(m) + '</span>').join("") + '</span></div>' : "") +
+      (v.key_skills ? '<div><span class="k">навыки</span><span>' + v.key_skills.split(", ").map(m => '<span class="chip">' + esc(m) + '</span>').join("") + '</span></div>' : "") +
       (v.gaps ? '<div><span class="k">пробелы</span><span>' + esc(v.gaps) + '</span></div>' : "") +
       (v.notes ? '<div><span class="k">внимание</span><span class="warn">' + esc(v.notes) + '</span></div>' : "") +
       (v.drop_reason ? '<div><span class="k">отсеяна</span><span class="warn">' + esc(v.drop_reason) + '</span></div>' : "") +
     '</div>' +
-    (v.review ? '<details class="review" open><summary>Разбор</summary><div>' + esc(v.review) + '</div></details>' : "") +
+    (v.review ? '<details class="review" open><summary>Мнение</summary><div id="r' + esc(v.id) + '">' + esc(v.review) + '</div></details>' : "") +
     (v.form_answers ? '<details class="review answers"><summary>Ответы на вопросы формы</summary><div>' + esc(v.form_answers) + '</div></details>' : "") +
     '<div class="form-q" id="b' + esc(v.id) + '"></div>' +
     '<div class="form-q" id="q' + esc(v.id) + '"></div>' +
@@ -506,6 +523,8 @@ async function rewriteLetter(id, button) {
     if (!r.ok) throw new Error(data.detail || r.status);
     const box = document.getElementById("l" + id);
     if (box) box.textContent = data.letter;
+    const opinion = document.getElementById("r" + id);
+    if (opinion && data.review) opinion.textContent = data.review;
     const kind = button.closest("details").querySelector(".kind");
     if (kind) { kind.textContent = "под вакансию"; kind.className = "kind kind-claude"; }
     button.textContent = "Переписано";
@@ -515,6 +534,32 @@ async function rewriteLetter(id, button) {
     setTimeout(() => { button.disabled = false; button.textContent = was; }, 4000);
   }
 }
+
+// Вакансия по ссылке: страница, оценка, письмо и мнение - без чата
+async function addByUrl() {
+  const field = document.getElementById("addUrl");
+  const button = document.getElementById("btnAdd");
+  const url = field.value.trim();
+  if (!url) return;
+  const was = button.textContent;
+  button.disabled = true; button.textContent = "Открываю, до минуты…";
+  try {
+    const r = await fetch("/api/finds/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || r.status);
+    field.value = "";
+    button.textContent = data.status === "dropped" ? "В архиве" : "Готово";
+    tab = data.status === "dropped" ? "dropped" : "analyzed";
+    document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+    await load();
+  } catch (e) {
+    button.textContent = "Не вышло: " + e.message;
+  } finally {
+    setTimeout(() => { button.disabled = false; button.textContent = was; }, 5000);
+  }
+}
+document.getElementById("btnAdd").addEventListener("click", addByUrl);
+document.getElementById("addUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") addByUrl(); });
 
 function copyLetter(id, button) {
   navigator.clipboard.writeText(document.getElementById(id).textContent);

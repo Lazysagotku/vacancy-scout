@@ -63,9 +63,18 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 DEFAULTS = {
-    "search_url": "",          # ссылка на выдачу hh по резюме
+    "search_url": "",          # ссылки на выдачу hh, по одной на строку
     "interval_minutes": "180",
     "enabled": "0",
+    # Сколько вакансий открывать за один прогон. Открыть - секунды браузера
+    # и ноль токенов, поэтому много. Потолок нужен из-за hh: сотни страниц
+    # подряд с залогиненного аккаунта - это капча на аккаунте Ивана.
+    "analyze_limit": "120",
+    # Сколько писем через Claude за прогон. Письмо - 7 тысяч токенов,
+    # и его читают только там, куда пойдёт отклик. Фоном пишутся только
+    # сильные (оценка от 60), лучшие первыми; остальным - кнопка в карточке.
+    # 10 писем на прогон при восьми прогонах в сутки - потолок 80 в день.
+    "letter_limit": "10",
 }
 
 
@@ -80,16 +89,42 @@ def connect():
         con.close()
 
 
+# Колонки, появившиеся после первой схемы. База у Ивана одна и живая,
+# пересоздавать её нельзя - поэтому добавляем по одной, если ещё нет.
+LATER_COLUMNS = {
+    "review":           "TEXT",              # мнение: рекомендую или нет и почему
+    "form_answers":     "TEXT",              # ответы на вопросы формы отклика
+    "resume":           "TEXT",              # какое из трёх резюме прикладывать
+    "letter_kind":      "TEXT DEFAULT ''",   # template - абзацы из letter.py, claude - под вакансию
+    # Шапка вакансии со страницы hh (12.09): оформление, график, формат -
+    # то, что Иван смотрит первым делом, и чего в карточке выдачи нет
+    "employment":       "TEXT",              # полная занятость, частичная
+    "hiring":           "TEXT",              # оформление: ТД, ГПХ, самозанятый
+    "schedule":         "TEXT",              # график: 5/2, 2/2, сменный
+    "hours":            "TEXT",              # рабочие часы
+    "work_format":      "TEXT",              # удалённо, гибрид, на месте
+    "employer_rating":  "REAL",              # рейтинг работодателя на hh
+    "employer_reviews": "INTEGER",           # число отзывов
+    "key_skills":       "TEXT",              # «Ключевые навыки» через запятую
+    "archived_at":      "TEXT",              # вакансия в архиве: с какого числа
+}
+
+
 def init() -> None:
     with connect() as con:
         con.executescript(SCHEMA)
-        # Откуда письмо: template (абзацы из letter.py) или claude (под вакансию).
-        # Колонка добавлена 11.09, старая база её не знает.
         cols = {row[1] for row in con.execute("PRAGMA table_info(finds)")}
-        if "letter_kind" not in cols:
-            con.execute("ALTER TABLE finds ADD COLUMN letter_kind TEXT DEFAULT ''")
+        for name, kind in LATER_COLUMNS.items():
+            if name not in cols:
+                con.execute(f"ALTER TABLE finds ADD COLUMN {name} {kind}")
         for key, value in DEFAULTS.items():
             con.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
+
+
+def get_find(vacancy_id: str) -> dict | None:
+    with connect() as con:
+        row = con.execute("SELECT * FROM finds WHERE id = ?", (vacancy_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def get_setting(key: str, default: str = "") -> str:

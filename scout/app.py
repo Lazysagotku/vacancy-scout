@@ -54,6 +54,7 @@ class Settings(BaseModel):
     search_url: str | None = None
     interval_minutes: int | None = None
     analyze_limit: int | None = None
+    letter_limit: int | None = None
 
 
 @app.post("/api/settings", tags=["скаутинг"])
@@ -63,7 +64,9 @@ def save_settings(payload: Settings):
     if payload.interval_minutes is not None:
         store.set_setting("interval_minutes", max(15, payload.interval_minutes))
     if payload.analyze_limit is not None:
-        store.set_setting("analyze_limit", max(0, min(60, payload.analyze_limit)))
+        store.set_setting("analyze_limit", max(0, min(300, payload.analyze_limit)))
+    if payload.letter_limit is not None:
+        store.set_setting("letter_limit", max(0, min(100, payload.letter_limit)))
     return runner.status()
 
 
@@ -124,33 +127,52 @@ def analyze(vacancy_id: str, deep: bool = Query(default=True)):
 
 @app.post("/api/finds/{vacancy_id}/rewrite", tags=["находки"])
 def rewrite(vacancy_id: str):
-    """Переписывает письмо под вакансию через Claude - по кнопке в карточке."""
+    """Письмо и мнение под вакансию через Claude - по кнопке в карточке."""
     from scout import writer
-    from scout.hh import Vacancy
-    from scout.scoring import score
-    from scout import response_form
-    items = [f for f in store.list_finds() if f["id"] == vacancy_id]
-    if not items:
+    from scout.analysis import write_letter
+    find = store.get_find(vacancy_id)
+    if not find:
         raise HTTPException(404, "Находка не найдена")
-    find = items[0]
     if not (find.get("description") or ""):
         raise HTTPException(409, "Сначала разбор: без описания вакансии письмо не написать")
     if not writer.available():
         raise HTTPException(503, "Claude недоступен: проверь VPN")
-    vacancy = Vacancy(
-        id=find["id"], name=find["name"], employer=find.get("employer") or "",
-        url=find.get("url") or "", salary_from=find.get("salary_from"),
-        salary_to=find.get("salary_to"), currency="RUR", schedule=None,
-        experience=find.get("experience"), published=find.get("found_at", "")[:10],
-        description=find["description"],
-    )
-    verdict = score(vacancy)
-    resume = find.get("resume") or profile.resume_for(verdict.track, find["name"], find["description"])
-    letter = writer.compose(vacancy, verdict, resume, response_form.known(vacancy_id))
-    if not letter:
+    updated = write_letter(find)
+    if not updated:
         raise HTTPException(502, "Claude не вернул письмо, попробуй ещё раз")
-    store.update_find(vacancy_id, letter=letter, letter_kind="claude")
-    return {"letter": letter, "letter_kind": "claude"}
+    return {"letter": updated["letter"], "review": updated.get("review") or "", "letter_kind": "claude"}
+
+
+class Added(BaseModel):
+    url: str
+
+
+@app.post("/api/finds/add", tags=["находки"])
+def add_find(payload: Added):
+    """Вакансия по ссылке или id - минуя выдачу.
+
+    Для тех, что Иван находит сам: раньше он присылал текст в чат, теперь
+    ссылку сюда. Разведчик открывает страницу, оценивает, пишет письмо
+    и мнение - в чате ничего держать не нужно.
+    """
+    import re
+    from scout.analysis import analyze_find
+    m = re.search(r"(\d{6,})", payload.url or "")
+    if not m:
+        raise HTTPException(400, "Не вижу id вакансии в ссылке")
+    vacancy_id = m.group(1)
+    find = store.get_find(vacancy_id)
+    if not find:
+        store.save_finds([{"id": vacancy_id, "name": f"вакансия {vacancy_id}",
+                           "url": f"https://hh.ru/vacancy/{vacancy_id}", "employer": ""}],
+                         query="вручную")
+        find = store.get_find(vacancy_id)
+    elif find.get("status") == "dropped":
+        store.update_find(vacancy_id, status="new", drop_reason=None)
+    try:
+        return analyze_find(vacancy_id, deep=True)
+    except collector.CollectError as error:
+        raise HTTPException(502, str(error)) from error
 
 
 @app.get("/api/finds/{vacancy_id}/brief", tags=["находки"])
@@ -197,7 +219,7 @@ def peek_form(vacancy_id: str):
 
 
 @app.post("/api/finds/analyze-all", tags=["находки"])
-def analyze_all(limit: int = Query(default=15, ge=1, le=400)):
+def analyze_all(limit: int = Query(default=120, ge=1, le=400)):
     """Разбирает лучшие неразобранные прямо сейчас, не дожидаясь сбора."""
     import threading
     threading.Thread(target=runner.analyze_batch, args=(limit,), daemon=True).start()

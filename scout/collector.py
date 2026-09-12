@@ -14,10 +14,27 @@ API hh для соискателей закрыт, поэтому идём те�
 
 from __future__ import annotations
 
+import logging
+import random
 import re
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 PROFILE = Path(__file__).resolve().parent.parent / ".browser"
+
+MAX_PAGES = 40          # выдача hh редко длиннее 30 страниц, дальше она повторяет последнюю
+PAGE_SIZE = 100         # items_on_page: вдвое меньше загрузок, чем при 50 по умолчанию
+
+
+def pause(page, low: float = 1.5, high: float = 3.0) -> None:
+    """Пауза между страницами, как у человека.
+
+    Браузер залогинен под аккаунтом Ивана, и с него же уходят отклики.
+    Сотни страниц без пауз - это капча или блокировка именно этого аккаунта,
+    поэтому экономить здесь нельзя.
+    """
+    page.wait_for_timeout(int(random.uniform(low, high) * 1000))
 
 # Логика разбора карточки живёт в браузере: так проще пережить смену вёрстки -
 # правится один кусок, и он же отлаживается в консоли руками.
@@ -90,14 +107,34 @@ class VpnCheck(CollectError):
     """hh требует пройти проверку VPN - нужен человек."""
 
 
-def collect(search_url: str, pages: int = 2, headless: bool = True) -> list[dict]:
-    """Открывает выдачу и снимает карточки. Возвращает список находок."""
+def _page_url(search_url: str, number: int) -> str:
+    """Ссылка на страницу выдачи с крупным шагом. Главная hh параметров не принимает."""
+    url = re.sub(r"([?&])page=\d+", "", search_url)
+    url = re.sub(r"([?&])items_on_page=\d+", "", url)
+    if "/search/" not in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}items_on_page={PAGE_SIZE}&page={number}"
+
+
+def collect(search_url: str, pages: int = MAX_PAGES, headless: bool = True,
+            known: set[str] | None = None) -> list[dict]:
+    """Открывает выдачу и снимает карточки до конца. Возвращает список находок.
+
+    Идём по страницам, пока они не кончатся. Ранний стоп: выдача отсортирована
+    по дате, и если целая страница состоит из уже известных id - дальше только
+    старое. Так ночной проход берёт всё, а дневной обходится одной страницей.
+    """
     if not search_url.strip():
         raise CollectError("Не задана ссылка на выдачу hh - укажите её в настройках.")
+    if not search_url.startswith("http"):
+        raise CollectError("Ссылка не начинается с http - проверь строку в настройках.")
 
     from playwright.sync_api import sync_playwright
 
+    known = known or set()
     found: list[dict] = []
+    seen: set[str] = set()
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE),
@@ -107,31 +144,54 @@ def collect(search_url: str, pages: int = 2, headless: bool = True) -> list[dict
         page = context.pages[0] if context.pages else context.new_page()
         try:
             for number in range(pages):
-                url = search_url
-                if number:
-                    url = re.sub(r"([?&])page=\d+", "", url)
-                    url += ("&" if "?" in url else "?") + f"page={number}"
-                response = page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+                response = page.goto(_page_url(search_url, number),
+                                     wait_until="domcontentloaded", timeout=45_000)
                 if response and response.status >= 400:
-                    raise CollectError(
-                        f"hh ответил {response.status}. Проверьте VPN и вход в аккаунт."
-                    )
+                    raise CollectError(f"hh ответил {response.status} - проверь вход в аккаунт.")
+                if hit_vpn_check(page):
+                    raise VpnCheck("hh просит пройти проверку VPN - открой браузер кнопкой «Войти в hh».")
                 page.wait_for_timeout(1500)
                 chunk = page.evaluate(EXTRACT)
-                if not chunk:
-                    break
-                found.extend(chunk)
+                fresh = [c for c in chunk if c["id"] not in seen]
+                if not fresh:
+                    break                                    # выдача кончилась или пошла по кругу
+                seen.update(c["id"] for c in fresh)
+                found.extend(fresh)
+                if all(c["id"] in known for c in fresh):
+                    break                                    # дальше только известное
+                if "/search/" not in search_url:
+                    break                                    # главная - одна страница
+                pause(page)
         except CollectError:
             raise
         except Exception as error:
-            raise CollectError(f"Не удалось собрать выдачу: {error}") from error
+            raise CollectError(short_error(error)) from error
         finally:
             context.close()
+    return found
 
-    unique: dict[str, dict] = {}
-    for item in found:
-        unique.setdefault(item["id"], item)
-    return list(unique.values())
+
+def short_error(error: Exception) -> str:
+    """Короткая причина вместо простыни Playwright.
+
+    Иван 12.09: «длинные строки пугают и как будто всё сломалось». Полный
+    текст уходит в лог, человеку - одна строка с тем, что делать.
+    """
+    text = str(error)
+    log.warning("сборщик: %s", text[:2000])
+    checks = (
+        ("invalid URL", "Ссылка не открывается - проверь, что каждая ссылка на своей строке."),
+        ("vpncheeck", "hh просит пройти проверку VPN - открой браузер кнопкой «Войти в hh»."),
+        ("Timeout", "hh не ответил за 45 секунд - выключен VPN или лежит сеть."),
+        ("net::ERR_", "Нет сети до hh - выключен VPN или лежит сеть."),
+        ("ProcessSingleton", "Браузер разведчика уже открыт другим процессом - подожди минуту."),
+        ("Target page, context or browser has been closed", "Окно браузера закрылось во время сбора."),
+    )
+    for needle, reason in checks:
+        if needle in text:
+            return reason
+    first = text.strip().splitlines()[0] if text.strip() else "неизвестная ошибка"
+    return first[:140]
 
 
 def fetch_description(vacancy_id: str, headless: bool = True) -> str:
@@ -227,17 +287,104 @@ def is_authorized() -> bool:
             context.close()
 
 
-def fetch_descriptions(vacancy_ids: list[str], headless: bool = True,
-                       on_progress=None) -> dict[str, str]:
-    """Читает описания пачкой в одном браузере.
+# Страница вакансии целиком: шапка, компания, описание, навыки, архив.
+# Селекторы data-qa сняты с живой страницы 12.09; на случай их смены есть
+# запасной разбор по тексту страницы - подписи «График:», «Оформление:»
+# видны человеку и меняются реже, чем атрибуты.
+DETAILS = r"""
+() => {
+  const text = (sel) => (document.querySelector(sel)?.innerText || "").replace(/\s+/g, " ").trim();
+  const body = document.body.innerText || "";
+  const byLabel = (label) => {
+    const m = body.match(new RegExp(label + ":\s*([^\n]+)"));
+    return m ? m[1].trim() : "";
+  };
+  let skills = [...document.querySelectorAll('[data-qa="skills-element"]')]
+      .map(e => e.innerText.trim()).filter(Boolean);
+  if (!skills.length) {
+    const i = body.indexOf("Ключевые навыки");
+    if (i >= 0) {
+      const chunk = body.slice(i + 15, i + 1500);
+      const stop = chunk.search(/Соискателям с особенностями|Контакты|Вакансия опубликована|Похожие вакансии|Задайте вопрос|Откликнуться/);
+      skills = (stop >= 0 ? chunk.slice(0, stop) : chunk).split("\n")
+        .map(x => x.trim()).filter(x => x && x.length < 60);
+    }
+  }
+  const archived = !!document.querySelector('[data-qa="vacancy-title-archived-text"], [data-qa="vacancy-archive-description"]');
+  return {
+    title: text('[data-qa="vacancy-title"]'),
+    experience: text('[data-qa="vacancy-experience"]') || byLabel("Опыт работы"),
+    employment: text('[data-qa="common-employment-text"]'),
+    hiring: text('[data-qa="vacancy-hiring-formats"]') || byLabel("Оформление"),
+    schedule: text('[data-qa="work-schedule-by-days-text"]') || byLabel("График"),
+    hours: text('[data-qa="working-hours-text"]') || byLabel("Рабочие часы"),
+    work_format: text('[data-qa="work-formats-text"]') || byLabel("Формат работы"),
+    employer: text('[data-qa="vacancy-company-name"]'),
+    rating: text('[data-qa="employer-review-small-widget-total-rating"]'),
+    reviews: text('[data-qa="employer-review-small-widget-review-count-action"]'),
+    skills,
+    archived,
+    archived_text: text('[data-qa="vacancy-title-archived-text"]'),
+    description: document.querySelector('[data-qa="vacancy-description"]')?.innerText || "",
+  };
+}
+"""
+
+LABELS = re.compile(r"^(Опыт работы|Оформление|График|Рабочие часы|Формат работы)\s*:\s*", re.I)
+
+
+def _tidy(raw: dict) -> dict:
+    """Приводит снятое со страницы к тому, что кладётся в базу."""
+    def clean(key: str) -> str:
+        return LABELS.sub("", (raw.get(key) or "").replace(" ", " ")).strip()
+
+    rating = None
+    m = re.search(r"\d[.,]\d", raw.get("rating") or "")
+    if m:
+        rating = float(m.group().replace(",", "."))
+    reviews = None
+    m = re.search(r"(\d[\d\s\u202f\u00a0]*)\s*отзыв", raw.get("reviews") or "")
+    if m:
+        reviews = int(re.sub(r"\D", "", m.group(1)))
+    archived_at = ""
+    if raw.get("archived"):
+        m = re.search(r"с\s+(\d{1,2}\s+\S+(?:\s+\d{4})?)", raw.get("archived_text") or "")
+        archived_at = m.group(1) if m else "да"
+    title = (raw.get("title") or "").strip()
+    if raw.get("archived_text"):
+        title = title.replace(raw["archived_text"].strip(), "").strip()
+    return {
+        "title": title,
+        "experience": clean("experience"),
+        "employment": clean("employment"),
+        "hiring": clean("hiring"),
+        "schedule": clean("schedule"),
+        "hours": clean("hours"),
+        "work_format": clean("work_format"),
+        "employer": (raw.get("employer") or "").strip(),
+        "employer_rating": rating,
+        "employer_reviews": reviews,
+        "key_skills": ", ".join(dict.fromkeys(raw.get("skills") or [])),
+        "archived_at": archived_at,
+        "description": (raw.get("description") or "").strip(),
+    }
+
+
+def fetch_details(vacancy_ids: list[str], headless: bool = True,
+                  on_progress=None) -> dict[str, dict]:
+    """Читает страницы вакансий пачкой в одном браузере.
 
     Профиль браузера лежит на диске и блокируется при открытии, поэтому
     поднимать по браузеру на вакансию нельзя - они мешают друг другу
     и описания приходят пустыми.
+
+    На выходе по каждому id словарь из _tidy. Пустое описание у живой
+    вакансии - страница не отдалась; у архивной - archived_at заполнен,
+    и описание там не нужно.
     """
     from playwright.sync_api import sync_playwright
 
-    result: dict[str, str] = {}
+    result: dict[str, dict] = {}
     if not vacancy_ids:
         return result
 
@@ -254,21 +401,36 @@ def fetch_descriptions(vacancy_ids: list[str], headless: bool = True,
                               wait_until="domcontentloaded", timeout=45_000)
                     if hit_vpn_check(page):
                         raise VpnCheck(
-                            "hh показывает проверку VPN и не отдаёт описания вакансий. "
-                            "Откройте браузер Скаута кнопкой «Войти в hh» и пройдите проверку "
-                            "вручную - после этого сессия запомнится."
+                            "hh просит пройти проверку VPN и не отдаёт вакансии - "
+                            "открой браузер кнопкой «Войти в hh» и пройди проверку."
                         )
-                    page.wait_for_selector('[data-qa="vacancy-description"]', timeout=15_000)
-                    result[vacancy_id] = page.evaluate(
-                        "() => document.querySelector('[data-qa=\"vacancy-description\"]')?.innerText || ''"
-                    )
+                    try:
+                        page.wait_for_selector(
+                            '[data-qa="vacancy-description"], [data-qa="vacancy-archive-description"]',
+                            timeout=15_000)
+                    except Exception:
+                        pass                     # снимем, что есть: шапка часто уже на месте
+                    # Виджет рейтинга дорисовывается на полсекунды позже описания
+                    try:
+                        page.wait_for_selector('[data-qa="employer-review-small-widget-total-rating"]',
+                                               timeout=2_500)
+                    except Exception:
+                        pass                     # у компании без отзывов виджета нет
+                    result[vacancy_id] = _tidy(page.evaluate(DETAILS))
                 except VpnCheck:
                     raise                        # это про всю пачку, а не про одну вакансию
-                except Exception:
-                    result[vacancy_id] = ""      # одна недоступная не должна рвать пачку
-                page.wait_for_timeout(400)       # вежливость к чужому сайту
+                except Exception as error:
+                    log.warning("вакансия %s не прочиталась: %s", vacancy_id, str(error)[:300])
+                    result[vacancy_id] = _tidy({})   # одна недоступная не должна рвать пачку
                 if on_progress:
                     on_progress(len(result), len(vacancy_ids))
+                pause(page)
         finally:
             context.close()
     return result
+
+
+def fetch_descriptions(vacancy_ids: list[str], headless: bool = True,
+                       on_progress=None) -> dict[str, str]:
+    """Только описания - для старых вызовов."""
+    return {k: v["description"] for k, v in fetch_details(vacancy_ids, headless, on_progress).items()}

@@ -8,12 +8,15 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
-from scout import store
+from scout import collector, store
 from scout.collector import CollectError, collect
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,6 +31,8 @@ class State:
     last_analyzed: int = 0         # сколько разобрал в последнем проходе
     last_forms: int = 0            # у скольких снял вопросы формы отклика
     last_error: str | None = None
+    last_note: str | None = None   # не ошибка, но человеку знать надо: сессия hh, пропущенная строка
+    authorized: bool | None = None # жива ли сессия hh у браузера скаута
     interval_minutes: int = 180
     search_url: str = ""
 
@@ -58,36 +63,70 @@ def scan_once() -> dict:
     run_id = store.start_run()
     url = store.get_setting("search_url", "")
     found, fresh, error, analyzed = 0, 0, "", 0
+    notes: list[str] = []
     try:
+        with _lock:
+            _state.stage = "проверка входа"
+        # Подборка «по резюме» без сессии превращается в общий поиск, и в
+        # списке появляется что угодно. Проверяем до сбора и говорим прямо.
+        try:
+            authorized = collector.is_authorized()
+        except Exception:
+            authorized = None
+        with _lock:
+            _state.authorized = authorized
+        if authorized is False:
+            notes.append("Сессия hh истекла - нажми «Войти в hh», иначе подборка по резюме отдаёт общий поиск.")
+
         with _lock:
             _state.stage = "сбор"
         # Ссылок может быть несколько, по одной на строку. Подборка hh «по резюме» -
         # рекомендательная выдача, и она пропускала вакансии, которые Иван находил
         # обычным поиском по словам (11.09: восемь вакансий, ни одной в базе).
         # Поэтому рядом с подборкой идут поисковые запросы по ключевым словам.
+        # Одна плохая строка не должна ронять весь прогон.
+        known = store.known_ids()
         seen: dict[str, dict] = {}
-        for line in url.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            for item in collect(line):
-                seen.setdefault(item["id"], item)
+        lines = [line.strip() for line in url.splitlines()]
+        lines = [line for line in lines if line and not line.startswith("#")]
+        worked = 0
+        for number, line in enumerate(lines, start=1):
+            with _lock:
+                _state.stage = f"сбор {number} из {len(lines)}"
+            try:
+                for item in collect(line, known=known):
+                    seen.setdefault(item["id"], item)
+                worked += 1
+            except CollectError as problem:
+                notes.append(f"строка {number}: {problem}")
+                if isinstance(problem, collector.VpnCheck):
+                    break                                  # дальше тот же ответ
+        # Ни одна ссылка не открылась, но сессия есть - главная hh под
+        # авторизацией тоже показывает подборку. Просьба Ивана 12.09.
+        if not worked and lines and authorized:
+            with _lock:
+                _state.stage = "сбор с главной hh"
+            try:
+                for item in collect("https://hh.ru/", known=known):
+                    seen.setdefault(item["id"], item)
+                notes.append("Ссылки из настроек не открылись - взял вакансии с главной hh.")
+            except CollectError as problem:
+                notes.append(f"главная hh: {problem}")
+        if not worked and not seen:
+            error = notes[-1] if notes else "Не удалось открыть ни одной ссылки."
+
         items = list(seen.values())
         found = len(items)
         # Отсеянные остаются в базе, поэтому save_finds их просто не тронет -
         # повторно они в «новые» не попадут
-        fresh = store.save_finds(items, query=url.splitlines()[0].strip() if url.strip() else "")
+        fresh = store.save_finds(items, query=lines[0] if lines else "")
 
         # Разбираем сразу: человеку нужен готовый список, а не очередь на 200 кнопок
-        limit = int(store.get_setting("analyze_limit", "15"))
+        limit = int(store.get_setting("analyze_limit", "120"))
         if limit:
-            with _lock:
-                _state.stage = "разбор"
             analyzed = analyze_batch(limit)
-    except CollectError as problem:
-        error = str(problem)
     except Exception as problem:                       # неожиданное - тоже показываем
-        error = f"Непредвиденная ошибка: {problem}"
+        error = collector.short_error(problem)
     finally:
         store.finish_run(run_id, found, fresh, error)
         now = datetime.now()
@@ -99,32 +138,35 @@ def scan_once() -> dict:
             _state.last_found = found
             _state.last_fresh = fresh
             _state.last_error = error or None
+            _state.last_note = " ".join(notes) or None
             if _state.running:
                 minutes = int(store.get_setting("interval_minutes", "180"))
                 _state.next_run = (now + timedelta(minutes=minutes)).isoformat(timespec="seconds")
-    return {"found": found, "fresh": fresh, "analyzed": analyzed, "error": error or None}
+    return {"found": found, "fresh": fresh, "analyzed": analyzed, "error": error or None,
+            "note": " ".join(notes) or None}
 
 
-def analyze_batch(limit: int = 15) -> int:
-    """Разбирает лучшие неразобранные находки в одном браузере.
+def analyze_batch(limit: int = 120) -> int:
+    """Открывает неразобранные находки и разбирает их в одном браузере.
 
-    Список отсортирован по предварительной оценке, поэтому первыми уходят
-    в разбор те, у кого больше шансов. Совсем безнадёжные не открываем:
-    их вердикт понятен по заголовку, а каждая страница стоит секунд.
+    Открываем всех, кто прошёл стоп-лист по заголовку: по названию не угадать,
+    что внутри, а страница стоит секунды и ноль токенов. Потолок на прогон -
+    из-за hh: сотни страниц подряд с аккаунта Ивана - это капча на его
+    аккаунте. Письма - лучшим по оценке, в пределах бюджета на прогон.
     """
     from scout.analysis import analyze_many          # импорт здесь: избегаем цикла
 
-    batch = [f for f in store.list_finds("new")[:limit * 3]
-             if (f.get("score") or 0) >= 20][:limit]
+    batch = [f for f in store.list_finds("new") if f.get("verdict") != "пропустить"][:limit]
     if not batch:
         return 0
+    budget = int(store.get_setting("letter_limit", "20"))
 
-    def progress(done: int, total: int) -> None:
+    def progress(done: int, total: int, stage: str = "разбор") -> None:
         with _lock:
-            _state.stage = f"разбор {done} из {total}"
+            _state.stage = f"{stage} {done} из {total}"
 
     try:
-        result = analyze_many(batch, on_progress=progress)
+        result = analyze_many(batch, on_progress=progress, letter_budget=budget)
 
         # Сразу смотрим формы отклика у лучших: вопросы работодателя нужны
         # до письма, иначе письмо придётся переписывать.
@@ -143,7 +185,7 @@ def analyze_batch(limit: int = 15) -> int:
     except Exception as problem:
         # Причину надо показать: молчаливый ноль выглядит как «нечего разбирать»
         with _lock:
-            _state.last_error = str(problem)
+            _state.last_error = collector.short_error(problem)
         return 0
     finally:
         with _lock:
