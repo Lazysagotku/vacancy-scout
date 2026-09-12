@@ -172,6 +172,8 @@
   .form-q .qs ul { margin: 0.25rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.85rem; }
   .form-note { font-size: 0.85rem; color: var(--muted); padding: 0.5rem 0.2rem; }
   .form-note.err { color: var(--skip); }
+  .kind { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.5rem; margin-left: 0.4rem; vertical-align: middle; }
+  .kind-claude { color: var(--accent-deep); border-color: var(--accent); }
   .letter { white-space: pre-wrap; font-size: 0.9rem; background: var(--surface); border-radius: 10px; padding: 0.9rem 1rem; margin-top: 0.6rem; }
   .copy { margin-top: 0.5rem; padding: 0.3rem 0.9rem; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); cursor: pointer; font-size: 0.85rem; }
   .copy:hover { border-color: var(--accent); }
@@ -344,7 +346,7 @@ function card(v, demo) {
     (v.form_answers ? '<details class="review answers"><summary>Ответы на вопросы формы</summary><div>' + esc(v.form_answers) + '</div></details>' : "") +
     '<div class="form-q" id="b' + esc(v.id) + '"></div>' +
     '<div class="form-q" id="q' + esc(v.id) + '"></div>' +
-    (v.letter ? '<details><summary>Черновик сопроводительного</summary><div class="letter" id="l' + esc(v.id) + '">' + esc(v.letter) + '</div><button class="copy" type="button" onclick="copyLetter(\'l' + esc(v.id) + '\', this)">Скопировать</button></details>' : "") +
+    (v.letter ? '<details><summary>Черновик сопроводительного' + (v.letter_kind === "claude" ? ' <span class="kind kind-claude">под вакансию</span>' : ' <span class="kind">шаблон</span>') + '</summary><div class="letter" id="l' + esc(v.id) + '">' + esc(v.letter) + '</div><button class="copy" type="button" onclick="copyLetter(\'l' + esc(v.id) + '\', this)">Скопировать</button> <button class="copy" type="button" onclick="rewriteLetter(\'' + esc(v.id) + '\', this)">Переписать под вакансию</button></details>' : "") +
     actions +
   '</article>';
 }
@@ -491,6 +493,26 @@ async function mark(id, status) {
     await refreshStatus();
   } catch (error) {
     alert(error.message);
+  }
+}
+
+// Письмо под вакансию через Claude. Идёт до минуты - кнопка это показывает.
+async function rewriteLetter(id, button) {
+  const was = button.textContent;
+  button.disabled = true; button.textContent = "Пишу, до минуты…";
+  try {
+    const r = await fetch("/api/finds/" + id + "/rewrite", { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || r.status);
+    const box = document.getElementById("l" + id);
+    if (box) box.textContent = data.letter;
+    const kind = button.closest("details").querySelector(".kind");
+    if (kind) { kind.textContent = "под вакансию"; kind.className = "kind kind-claude"; }
+    button.textContent = "Переписано";
+  } catch (e) {
+    button.textContent = "Не вышло: " + e.message;
+  } finally {
+    setTimeout(() => { button.disabled = false; button.textContent = was; }, 4000);
   }
 }
 

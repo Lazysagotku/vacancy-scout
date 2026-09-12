@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from scout import collector, profile, store
+from scout import collector, profile, store, writer
 from scout.hh import Vacancy
 from scout.letter import draft
 from scout.scoring import score
@@ -28,6 +28,18 @@ def _save(find: dict, description: str) -> dict:
     # на её вопросы: то, что спросят отдельным полем, в письме не нужно.
     from scout import response_form
     form = response_form.known(find["id"])
+    resume = profile.resume_for(verdict.track, find.get("name", ""), description)
+
+    # Письмо: сначала шаблон как страховка, потом Claude под конкретную
+    # вакансию. Claude вызывается только там, куда реально пойдёт отклик -
+    # у отсеянных и слабых письмо никто не прочитает, а минута на каждое
+    # письмо в пачке из пятнадцати - это четверть часа.
+    letter, kind = draft(vacancy, verdict, form), "template"
+    if letter and verdict.score >= 45 and description:
+        written = writer.compose(vacancy, verdict, resume, form)
+        if written:
+            letter, kind = written, "claude"
+
     store.update_find(
         find["id"],
         status="analyzed",
@@ -38,8 +50,9 @@ def _save(find: dict, description: str) -> dict:
         gaps="; ".join(verdict.gaps),
         blockers="; ".join(verdict.blockers),
         notes="; ".join(verdict.notes),
-        letter=draft(vacancy, verdict, form),
-        resume=profile.resume_for(verdict.track, find.get("name", ""), description),
+        letter=letter,
+        letter_kind=kind,
+        resume=resume,
         description=description,
         analyzed_at=datetime.now().isoformat(timespec="seconds"),
     )

@@ -83,6 +83,11 @@ def connect():
 def init() -> None:
     with connect() as con:
         con.executescript(SCHEMA)
+        # Откуда письмо: template (абзацы из letter.py) или claude (под вакансию).
+        # Колонка добавлена 11.09, старая база её не знает.
+        cols = {row[1] for row in con.execute("PRAGMA table_info(finds)")}
+        if "letter_kind" not in cols:
+            con.execute("ALTER TABLE finds ADD COLUMN letter_kind TEXT DEFAULT ''")
         for key, value in DEFAULTS.items():
             con.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
 

@@ -122,6 +122,37 @@ def analyze(vacancy_id: str, deep: bool = Query(default=True)):
         raise HTTPException(502, str(error)) from error
 
 
+@app.post("/api/finds/{vacancy_id}/rewrite", tags=["находки"])
+def rewrite(vacancy_id: str):
+    """Переписывает письмо под вакансию через Claude - по кнопке в карточке."""
+    from scout import writer
+    from scout.hh import Vacancy
+    from scout.scoring import score
+    from scout import response_form
+    items = [f for f in store.list_finds() if f["id"] == vacancy_id]
+    if not items:
+        raise HTTPException(404, "Находка не найдена")
+    find = items[0]
+    if not (find.get("description") or ""):
+        raise HTTPException(409, "Сначала разбор: без описания вакансии письмо не написать")
+    if not writer.available():
+        raise HTTPException(503, "Claude недоступен: проверь VPN")
+    vacancy = Vacancy(
+        id=find["id"], name=find["name"], employer=find.get("employer") or "",
+        url=find.get("url") or "", salary_from=find.get("salary_from"),
+        salary_to=find.get("salary_to"), currency="RUR", schedule=None,
+        experience=find.get("experience"), published=find.get("found_at", "")[:10],
+        description=find["description"],
+    )
+    verdict = score(vacancy)
+    resume = find.get("resume") or profile.resume_for(verdict.track, find["name"], find["description"])
+    letter = writer.compose(vacancy, verdict, resume, response_form.known(vacancy_id))
+    if not letter:
+        raise HTTPException(502, "Claude не вернул письмо, попробуй ещё раз")
+    store.update_find(vacancy_id, letter=letter, letter_kind="claude")
+    return {"letter": letter, "letter_kind": "claude"}
+
+
 @app.get("/api/finds/{vacancy_id}/brief", tags=["находки"])
 def get_brief(vacancy_id: str):
     """Материал для письма: разделы вакансии, зацепки, требования.
