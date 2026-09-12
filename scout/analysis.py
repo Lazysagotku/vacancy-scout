@@ -20,8 +20,10 @@ from scout.hh import Vacancy
 from scout.letter import draft
 from scout.scoring import score
 
-LETTER_MIN_SCORE = 45          # ниже - письмо никто не прочитает, шаблона хватит
-AUTO_LETTER_SCORE = 60         # фоновый прогон пишет письма только сильным; остальным - кнопка
+# Письмо пишется всем, кроме явно мимо: Иван 12.09 - «сопрод не пишешь
+# только тем, с которыми очень много несостыковок», «брать количеством».
+LETTER_MIN_SCORE = 30
+AUTO_LETTER_SCORE = 30
 
 PAGE_FIELDS = ("employment", "hiring", "schedule", "hours", "work_format",
                "employer_rating", "employer_reviews", "key_skills")
@@ -191,5 +193,8 @@ def analyze_many(finds: list[dict], on_progress=None, letter_budget: int = 20) -
     for number, find in enumerate(worth[:max(0, letter_budget)], start=1):
         if on_progress:
             on_progress(number, len(worth[:letter_budget]), stage="письма")
-        write_letter(find)
+        if write_letter(find) is None:
+            # Один провал - почти всегда выключенный VPN: дальше будут те же
+            # три минуты таймаута на каждое письмо. Остальным - кнопка.
+            break
     return len(analyzed)
