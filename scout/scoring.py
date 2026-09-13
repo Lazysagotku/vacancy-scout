@@ -73,6 +73,13 @@ def score(vacancy: Vacancy) -> Verdict:
     low = text.lower()
 
     blockers = [reason for word, reason in profile.BLOCKERS.items() if word in low]
+    # Железо и сети: три и больше признаков - суть работы, блокер; меньше - пометка
+    hands = sorted({label for pattern, label in profile.HANDS_ON.items() if re.search(pattern, low)})
+    hands_note = ""
+    if len(hands) >= 3:
+        blockers.append("железо и сети как суть работы: " + ", ".join(hands))
+    elif hands:
+        hands_note = "есть железо/сети: " + ", ".join(hands)
 
     matched: list[tuple[str, str]] = []
     earned = 0
@@ -92,6 +99,8 @@ def score(vacancy: Vacancy) -> Verdict:
     value = min(100, round(raw / 60 * 100))
 
     notes = []
+    if hands_note:
+        notes.append(hands_note)
     top = vacancy.salary_to or vacancy.salary_from
     if top and top < profile.SALARY_FLOOR:
         value = max(0, value - 15)
