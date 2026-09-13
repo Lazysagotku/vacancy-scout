@@ -106,6 +106,9 @@ LATER_COLUMNS = {
     "employer_reviews": "INTEGER",           # число отзывов
     "key_skills":       "TEXT",              # «Ключевые навыки» через запятую
     "archived_at":      "TEXT",              # вакансия в архиве: с какого числа
+    # 14.09: закреплённые Иваном сверху и мнение отдельным полем для группировки
+    "pinned_at":        "TEXT",              # нажал «переписать под вакансию» - карточка держится вверху
+    "opinion":          "TEXT",              # Рекомендую | Под вопросом + | Под вопросом | Под вопросом - | Не рекомендую
 }
 
 
@@ -178,7 +181,10 @@ def list_finds(status: str | None = None) -> list[dict]:
     if status:
         sql += " WHERE status = ?"
         args = (status,)
-    sql += " ORDER BY CASE WHEN score IS NULL THEN 1 ELSE 0 END, score DESC, found_at DESC"
+    # Закреплённые (Иван нажал «переписать») - первыми, свежие закрепления выше;
+    # дальше по оценке. Группировка по мнению делается в интерфейсе.
+    sql += (" ORDER BY CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END, pinned_at DESC,"
+            " CASE WHEN score IS NULL THEN 1 ELSE 0 END, score DESC, found_at DESC")
     with connect() as con:
         return [dict(row) for row in con.execute(sql, args)]
 

@@ -105,6 +105,7 @@ def _save(find: dict, description: str, write_letter: bool = True) -> dict:
         if written:
             fields["letter"], fields["review"] = written
             fields["letter_kind"] = "claude"
+            fields["opinion"] = writer.opinion_of(fields["review"])
     store.update_find(find["id"], **fields)
     return store.get_find(find["id"]) or find
 
@@ -123,8 +124,32 @@ def write_letter(find: dict) -> dict | None:
     if not written:
         return None
     letter, review = written
-    store.update_find(find["id"], letter=letter, review=review, letter_kind="claude", resume=resume)
+    store.update_find(find["id"], letter=letter, review=review, letter_kind="claude", resume=resume,
+                      opinion=writer.opinion_of(review))
     return store.get_find(find["id"])
+
+
+def catch_up_letters(budget: int, on_progress=None) -> int:
+    """Письма для уже разобранных находок без письма Claude - лучшие первыми.
+
+    Иван 14.09: «к рекомендую сразу пиши сопрод, чтобы я кнопку не жал и не ждал».
+    Прогон пишет письма только своей пачке, а сильные из прошлых прогонов
+    оставались с шаблоном. Здесь добираем их в пределах бюджета.
+    """
+    if budget <= 0:
+        return 0
+    todo = [f for f in store.list_finds("analyzed")
+            if f.get("letter_kind") != "claude" and (f.get("score") or 0) >= AUTO_LETTER_SCORE
+            and (f.get("description") or "")]
+    todo.sort(key=lambda f: -(f.get("score") or 0))
+    done = 0
+    for number, find in enumerate(todo[:budget], start=1):
+        if on_progress:
+            on_progress(number, min(len(todo), budget), stage="письма вдогонку")
+        if write_letter(find) is None:
+            break                                  # лимит или VPN - дальше те же провалы
+        done += 1
+    return done
 
 
 def analyze_find(vacancy_id: str, deep: bool = True) -> dict:
@@ -190,11 +215,15 @@ def analyze_many(finds: list[dict], on_progress=None, letter_budget: int = 20) -
     worth = sorted((f for f in analyzed
                     if (f.get("score") or 0) >= AUTO_LETTER_SCORE and f.get("letter_kind") != "claude"),
                    key=lambda f: -(f.get("score") or 0))
+    written = 0
     for number, find in enumerate(worth[:max(0, letter_budget)], start=1):
         if on_progress:
             on_progress(number, len(worth[:letter_budget]), stage="письма")
         if write_letter(find) is None:
-            # Один провал - почти всегда выключенный VPN: дальше будут те же
-            # три минуты таймаута на каждое письмо. Остальным - кнопка.
-            break
+            # Один провал - почти всегда выключенный VPN или лимит: дальше
+            # будут те же провалы. Остальным - кнопка.
+            return len(analyzed)
+        written += 1
+    # Остаток бюджета - на сильные из прошлых прогонов
+    catch_up_letters(max(0, letter_budget - written), on_progress)
     return len(analyzed)

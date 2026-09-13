@@ -172,6 +172,17 @@
   .form-q .qs ul { margin: 0.25rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.85rem; }
   .form-note { font-size: 0.85rem; color: var(--muted); padding: 0.5rem 0.2rem; }
   .form-note.err { color: var(--skip); }
+  .group { margin-bottom: 1.6rem; }
+  .group-title { font-family: "JetBrains Mono", monospace; font-size: 0.78rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.6rem; display: flex; align-items: baseline; gap: 0.6rem; }
+  .group-n { font-weight: 700; color: var(--ink); }
+  .group-hint { text-transform: none; letter-spacing: 0; font-family: inherit; font-size: 0.8rem; }
+  .opinion { font-size: 0.78rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.6rem; border: 1px solid var(--line); white-space: nowrap; }
+  .op-yes { color: #1f7a3a; border-color: #1f7a3a; }
+  .op-plus { color: #3b6d1f; border-color: #6a9a3a; }
+  .op-mid { color: var(--muted); }
+  .op-minus { color: #9a5a1f; border-color: #c08a4a; }
+  .op-no { color: #a12d2d; border-color: #a12d2d; }
+  .pin { font-size: 0.9rem; margin-left: 0.3rem; }
   .banner.note { background: var(--accent-soft); color: var(--ink); border-color: var(--line); }
   .kind { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0.05rem 0.5rem; margin-left: 0.4rem; vertical-align: middle; }
   .kind-claude { color: var(--accent-deep); border-color: var(--accent); }
@@ -299,6 +310,33 @@ async function refreshStatus() {
   });
 }
 
+// Вкладка «Разобрано» - по группам: закреплённые Иваном сверху, дальше по мнению.
+// Порядок групп - от «брать» к «мимо», без мнения - в конце: там письмо ещё шаблонное.
+const GROUPS = [
+  ["pinned", "Закреплённые", "нажимал «переписать» - держатся сверху"],
+  ["Рекомендую", "Рекомендую", "письмо готово, откликаться"],
+  ["Под вопросом +", "Под вопросом +", "ближе к рекомендации, один заметный пробел"],
+  ["Под вопросом", "Под вопросом", "на рассмотрение"],
+  ["Под вопросом -", "Под вопросом -", "ближе к отказу"],
+  ["Не рекомендую", "Не рекомендую", "совпадений почти нет"],
+  ["none", "Без мнения", "письмо шаблонное - разведчик допишет сам, либо кнопка «Переписать»"],
+];
+function opinionCss(o) {
+  return o === "Рекомендую" ? "op-yes" : o === "Не рекомендую" ? "op-no"
+       : o === "Под вопросом +" ? "op-plus" : o === "Под вопросом -" ? "op-minus" : "op-mid";
+}
+function groupKey(v) {
+  if (v.pinned_at) return "pinned";
+  return v.opinion || "none";
+}
+function grouped(items) {
+  const buckets = {};
+  items.forEach(v => { const k = groupKey(v); (buckets[k] = buckets[k] || []).push(v); });
+  return GROUPS.filter(([k]) => buckets[k] && buckets[k].length).map(([k, title, hint]) =>
+    '<div class="group"><h2 class="group-title">' + esc(title) + ' <span class="group-n">' + buckets[k].length + '</span><span class="group-hint">' + esc(hint) + '</span></h2>' +
+    buckets[k].map(v => card(v, false)).join("") + '</div>').join("");
+}
+
 function card(v, demo) {
   const css = v.css || (v.verdict === "сильный матч" ? "strong" : v.verdict === "пропустить" ? "skip"
             : v.verdict === "стоит посмотреть" ? "maybe" : "weak");
@@ -335,6 +373,8 @@ function card(v, demo) {
                  + esc(v.name) + '</a>' : esc(v.name)) +
       ' <span class="who">· ' + esc(v.employer || "") + '</span></h3>' +
       (v.verdict ? '<span class="badge ' + css + '">' + esc(v.verdict) + ' · ' + v.score + '</span>' : "") +
+      (v.opinion ? '<span class="opinion ' + opinionCss(v.opinion) + '">' + esc(v.opinion) + '</span>' : "") +
+      (v.pinned_at ? '<span class="pin" title="закреплено">📌</span>' : "") +
     '</div>' +
     '<div class="meta"><span class="money">' + esc(money) + '</span>' +
       (v.track ? '<span>трек: ' + esc(v.track) + '</span>' : "") +
@@ -378,7 +418,9 @@ async function load() {
       return;
     }
     const items = await api("/api/finds?status=" + tab);
-    if (items.length) {
+    if (items.length && tab === "analyzed") {
+      list.innerHTML = grouped(items);
+    } else if (items.length) {
       list.innerHTML = items.map(v => card(v, false)).join("");
     } else {
       list.innerHTML = '<div class="empty">' +
@@ -525,6 +567,8 @@ async function rewriteLetter(id, button) {
     if (box) box.textContent = data.letter;
     const opinion = document.getElementById("r" + id);
     if (opinion && data.review) opinion.textContent = data.review;
+    // Карточка теперь закреплена - перерисовать список, чтобы она уехала наверх
+    setTimeout(load, 1500);
     const kind = button.closest("details").querySelector(".kind");
     if (kind) { kind.textContent = "под вакансию"; kind.className = "kind kind-claude"; }
     button.textContent = "Переписано";

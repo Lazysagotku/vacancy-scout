@@ -137,10 +137,13 @@ def rewrite(vacancy_id: str):
         raise HTTPException(409, "Сначала разбор: без описания вакансии письмо не написать")
     if not writer.available():
         raise HTTPException(503, "Claude недоступен: проверь VPN")
+    # Нажатие - сигнал интереса: карточка закрепляется сверху и держится там
+    store.update_find(vacancy_id, pinned_at=datetime.now().isoformat(timespec="seconds"))
     updated = write_letter(find)
     if not updated:
         raise HTTPException(502, "Claude не вернул письмо, попробуй ещё раз")
-    return {"letter": updated["letter"], "review": updated.get("review") or "", "letter_kind": "claude"}
+    return {"letter": updated["letter"], "review": updated.get("review") or "", "letter_kind": "claude",
+            "opinion": updated.get("opinion") or ""}
 
 
 class Added(BaseModel):
