@@ -94,9 +94,12 @@ def score(vacancy: Vacancy) -> Verdict:
             penalty += weight
             gaps.append(reason)
 
-    # Нормируем: 60 очков совпадений считаем полным попаданием
+    # Нормируем мягкой кривой: 60 очков совпадений - около 67, 150 - около 83.
+    # Прежняя линейная шкала упиралась в 100 у половины находок, и внутри
+    # сотни порядок был случайным: DBA с двадцатью совпавшими словами стоял
+    # выше сопровождения с десятью. Иван 14.09: «упор в одно делаешь».
     raw = max(0, earned - penalty)
-    value = min(100, round(raw / 60 * 100))
+    value = round(100 * raw / (raw + 30)) if raw else 0
 
     notes = []
     if hands_note:
@@ -117,9 +120,14 @@ def score(vacancy: Vacancy) -> Verdict:
         if "более 6" in exp or "6 лет" in exp:
             value = max(0, value - 15)
             notes.append("требуют от 6 лет в разработке")
-    # Сопровождение с инфраструктурой - основное направление, ему приоритет в списке
+    # Сопровождение с инфраструктурой - основное направление, ему приоритет в списке.
+    # Ядро направления - поддержка и сопровождение в названии; DBA и DevOps тоже
+    # считаются треком support, но бонус ядра не получают.
     if track == "support":
-        value = min(100, value + 10)
+        value += 10
+        if any(_hit(w, head) for w in ("поддержк", "сопровожден", "l2", "l3", "support")):
+            value += 15
+        value = min(100, value)
     top = vacancy.salary_to or vacancy.salary_from
     if top and top < profile.SALARY_FLOOR:
         value = max(0, value - 15)
