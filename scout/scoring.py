@@ -101,6 +101,25 @@ def score(vacancy: Vacancy) -> Verdict:
     notes = []
     if hands_note:
         notes.append(hands_note)
+
+    track = detect_track(text, vacancy.name)
+    head = (vacancy.name or "").lower()
+    # Уровень и стаж в разработке: полтора года C# против senior/lead - это
+    # не «стек совпал», это другая лига. В сопровождении «ведущий» - его уровень.
+    # Иван 14.09: «почему сеньор питон наверху?» - потому что ключевые слова
+    # совпадали, а уровень не считался. Теперь считается.
+    if track in ("dev", "ai"):
+        senior = ("senior", "сеньор", "lead", "лид", "head", "architect", "архитектор", "staff", "principal", "tech lead")
+        if any(_hit(w, head) for w in senior):
+            value = max(0, value - 30)
+            notes.append("senior/lead в разработке - уровень выше опыта")
+        exp = (vacancy.experience or "").lower()
+        if "более 6" in exp or "6 лет" in exp:
+            value = max(0, value - 15)
+            notes.append("требуют от 6 лет в разработке")
+    # Сопровождение с инфраструктурой - основное направление, ему приоритет в списке
+    if track == "support":
+        value = min(100, value + 10)
     top = vacancy.salary_to or vacancy.salary_from
     if top and top < profile.SALARY_FLOOR:
         value = max(0, value - 15)
@@ -134,5 +153,5 @@ def score(vacancy: Vacancy) -> Verdict:
         value = max(0, value - 10)
         notes.append("по задачам это первая линия")
 
-    return Verdict(score=value, track=detect_track(text, vacancy.name), matched=matched,
+    return Verdict(score=value, track=track, matched=matched,
                    gaps=gaps, blockers=blockers, notes=notes)
