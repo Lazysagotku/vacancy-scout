@@ -6,8 +6,9 @@
 видит любой. Внутри трекера вилки, заметки о компаниях и фидбек
 с собеседований, внутри разведчика - черновики писем.
 
-Пароль лежит в переменной окружения. Пока её нет, защита выключена:
-на localhost она мешала бы, а туннель без пароля запускать не надо.
+Пароль лежит в переменной окружения. Туннель подключается к локальному
+порту и может выглядеть как localhost, поэтому адрес клиента не подходит
+для обхода авторизации.
 """
 
 from __future__ import annotations
@@ -22,11 +23,6 @@ from starlette.responses import Response
 ENV_USER = "APP_USER"
 ENV_PASS = "APP_PASSWORD"
 
-# Локальные адреса пускаем без пароля: с этой же машины сервисом
-# пользуются постоянно, и вводить пароль каждый раз незачем.
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
 def _expected() -> tuple[str, str] | None:
     password = os.getenv(ENV_PASS, "").strip()
     if not password:
@@ -35,16 +31,12 @@ def _expected() -> tuple[str, str] | None:
 
 
 class BasicAuth(BaseHTTPMiddleware):
-    """Спрашивает логин и пароль у всех, кто пришёл не с этой машины."""
+    """Спрашивает логин и пароль у каждого запроса при заданном пароле."""
 
     async def dispatch(self, request, call_next):
         creds = _expected()
         if creds is None:
-            return await call_next(request)
-
-        client = request.client.host if request.client else ""
-        if client in LOCAL_HOSTS:
-            return await call_next(request)
+            return Response("APP_PASSWORD не задан", status_code=503)
 
         header = request.headers.get("authorization", "")
         if header.startswith("Basic "):

@@ -168,7 +168,7 @@ def save_finds(items: list[dict], query: str = "") -> int:
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (item["id"], item["name"], item.get("employer"), item.get("url"),
                  item.get("salary_from"), item.get("salary_to"), item.get("experience"),
-                 int(bool(item.get("remote"))), now, query,
+                 int(bool(item.get("remote"))), now, item.get("query") or query,
                  guess["score"], guess["verdict"], guess["notes"]),
             )
             fresh += 1

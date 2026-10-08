@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 
 from scout import collector, store
 from scout.collector import CollectError, collect
+from scout.search_sources import built_in_sources
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class State:
     authorized: bool | None = None # жива ли сессия hh у браузера скаута
     interval_minutes: int = 180
     search_url: str = ""
+    preparing: bool = False
+    last_prepared: int = 0
+    last_prepare_error: str | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -43,6 +47,7 @@ class State:
 _state = State()
 _lock = threading.Lock()
 _thread: threading.Thread | None = None
+_prep_thread: threading.Thread | None = None
 _wake = threading.Event()
 
 
@@ -56,8 +61,8 @@ def status() -> dict:
 def scan_once() -> dict:
     """Один проход сбора. Возвращает результат и обновляет состояние."""
     with _lock:
-        if _state.busy:
-            return {"skipped": "сбор уже идёт"}
+        if _state.busy or _state.preparing:
+            return {"skipped": "сбор или подготовка писем уже идёт"}
         _state.busy = True
 
     run_id = store.start_run()
@@ -89,12 +94,17 @@ def scan_once() -> dict:
         seen: dict[str, dict] = {}
         lines = [line.strip() for line in url.splitlines()]
         lines = [line for line in lines if line and not line.startswith("#")]
+        # Сохранённая подборка hh может истечь. Поиск по словам идёт всегда,
+        # поэтому одна ссылка с 404 не превращается в пустую выдачу.
+        sources = [("сохранённая подборка", line, 2) for line in lines]
+        sources.extend((source.title, source.url, 1) for source in built_in_sources())
         worked = 0
-        for number, line in enumerate(lines, start=1):
+        for number, (label, line, pages) in enumerate(sources, start=1):
             with _lock:
-                _state.stage = f"сбор {number} из {len(lines)}"
+                _state.stage = f"сбор {number} из {len(sources)}"
             try:
-                for item in collect(line, known=known):
+                for item in collect(line, pages=pages, known=known):
+                    item.setdefault("query", label)
                     seen.setdefault(item["id"], item)
                 worked += 1
             except CollectError as problem:
@@ -103,7 +113,7 @@ def scan_once() -> dict:
                     break                                  # дальше тот же ответ
         # Ни одна ссылка не открылась, но сессия есть - главная hh под
         # авторизацией тоже показывает подборку. Просьба Ивана 12.09.
-        if not worked and lines and authorized:
+        if not worked and sources and authorized:
             with _lock:
                 _state.stage = "сбор с главной hh"
             try:
@@ -119,7 +129,7 @@ def scan_once() -> dict:
         found = len(items)
         # Отсеянные остаются в базе, поэтому save_finds их просто не тронет -
         # повторно они в «новые» не попадут
-        fresh = store.save_finds(items, query=lines[0] if lines else "")
+        fresh = store.save_finds(items, query="смешанный поиск")
 
         # Разбираем сразу: человеку нужен готовый список, а не очередь на 200 кнопок
         limit = int(store.get_setting("analyze_limit", "120"))
@@ -159,33 +169,38 @@ def analyze_batch(limit: int = 120) -> int:
     batch = [f for f in store.list_finds("new") if f.get("verdict") != "пропустить"][:limit]
     if not batch:
         return 0
-    budget = int(store.get_setting("letter_limit", "20"))
-
     def progress(done: int, total: int, stage: str = "разбор") -> None:
         with _lock:
             _state.stage = f"{stage} {done} из {total}"
 
     try:
-        result = analyze_many(batch, on_progress=progress, letter_budget=budget)
+        # Браузерная фаза должна завершаться без обращения к Claude: hh может
+        # работать лишь при выключенном VPN. Письма готовятся отдельным запуском.
+        result = analyze_many(batch, on_progress=progress, letter_budget=0)
 
-        # Сразу смотрим формы отклика у лучших: вопросы работодателя нужны
-        # до письма, иначе письмо придётся переписывать.
-        from scout.analysis import peek_forms
         with _lock:
-            _state.stage = "разведка форм"
-        forms = peek_forms([f for f in store.list_finds("analyzed")])
-        with _lock:
-            _state.last_forms = forms
+            # Открытие формы через браузер может менять поведение на hh.
+            # Автоматически эту операцию не выполняем.
+            _state.last_forms = 0
             _state.last_analyzed = result
             # Прошлая ошибка больше не актуальна: раз описания пришли,
             # держать на виду старую жалобу на VPN - врать человеку
             if result:
                 _state.last_error = None
         return result
-    except Exception as problem:
+    except CollectError as problem:
         # Причину надо показать: молчаливый ноль выглядит как «нечего разбирать»
         with _lock:
             _state.last_error = collector.short_error(problem)
+        return 0
+    except Exception as problem:
+        # Внутренняя ошибка кода - не сетевая. Раньше она проходила через
+        # short_error и человек читал совет «проверь маршрут к hh», хотя hh
+        # отвечал нормально. Текст исключения в состояние не выносим: он может
+        # содержать фрагмент вакансии или путь на диске.
+        log.exception("Разбор пачки прерван внутренней ошибкой")
+        with _lock:
+            _state.last_error = f"Внутренняя ошибка разбора: {type(problem).__name__}. Смотри лог сервиса."
         return 0
     finally:
         with _lock:
@@ -207,10 +222,12 @@ def _loop() -> None:
 def start() -> dict:
     global _thread
     with _lock:
-        if _state.running:
-            return status()
-        _state.running = True
-        _state.next_run = datetime.now().isoformat(timespec="seconds")
+        already_running = _state.running
+        if not already_running:
+            _state.running = True
+            _state.next_run = datetime.now().isoformat(timespec="seconds")
+    if already_running:
+        return status()
     store.set_setting("enabled", "1")
     _wake.clear()
     _thread = threading.Thread(target=_loop, daemon=True, name="scout-runner")
@@ -231,3 +248,51 @@ def resume_if_enabled() -> None:
     """После перезапуска приложения возвращаем скаут в то же состояние."""
     if store.get_setting("enabled", "0") == "1":
         start()
+
+
+def _prepare_letters_run(limit: int) -> None:
+    from scout.analysis import catch_up_letters
+
+    count = 0
+    error = None
+    try:
+        count = catch_up_letters(limit)
+    except Exception as problem:
+        # Ошибка стороннего CLI может содержать личные данные или пути.
+        error = type(problem).__name__
+        log.error("Сбой подготовки писем: %s", error)
+    finally:
+        with _lock:
+            _state.preparing = False
+            _state.last_prepared = count
+            _state.last_prepare_error = error
+
+
+def prepare_letters(limit: int = 10) -> dict:
+    """Запустить AI-фазу отдельно от браузерного сбора, без откликов."""
+    global _prep_thread
+    if not 1 <= limit <= 30:
+        raise ValueError("Лимит писем должен быть от 1 до 30")
+    with _lock:
+        if _state.busy or _state.preparing:
+            return {"started": False, "reason": "Сбор или подготовка уже идёт"}
+        _state.preparing = True
+        _state.last_prepare_error = None
+    from scout import writer
+    try:
+        available = writer.available()
+    except Exception:
+        available = False
+    if not available:
+        with _lock:
+            _state.preparing = False
+        return {"started": False, "reason": "Claude недоступен - проверь VPN"}
+    try:
+        _prep_thread = threading.Thread(target=_prepare_letters_run, args=(limit,),
+                                        daemon=True, name="scout-letter-preparation")
+        _prep_thread.start()
+    except Exception:
+        with _lock:
+            _state.preparing = False
+        raise
+    return {"started": True, "limit": limit}

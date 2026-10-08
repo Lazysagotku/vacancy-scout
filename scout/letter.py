@@ -19,6 +19,7 @@
 """
 
 from scout import profile
+from scout.policy import salary_line, salary_track_for_resume
 from scout.hh import Vacancy
 from scout.scoring import Verdict
 
@@ -185,12 +186,17 @@ def _themes_for(matched: list[tuple[str, str]], text: str, themes=None) -> list[
     return [block for _, block in scored[:4]]
 
 
-def draft(vacancy: Vacancy, verdict: Verdict, form: dict | None = None) -> str:
+def draft(vacancy: Vacancy, verdict: Verdict, form: dict | None = None,
+          resume: str | None = None) -> str:
     """Собирает черновик. Для отсеянных вакансий письма нет - незачем.
 
     Если форма отклика уже разведана и в ней есть вопросы работодателя,
     темы, о которых спросят отдельным полем, из письма убираются: работодатель
     иначе прочитает один ответ дважды.
+
+    `resume` - приложенное к отклику резюме. Зарплатная строка берётся из него,
+    поэтому трек скоринга («ai», пустой) её не ломает: в скоринге треков больше,
+    чем зарплатных, и `salary_line` на «ai» раньше падала ValueError.
     """
     if verdict.blockers:
         return ""
@@ -217,5 +223,8 @@ def draft(vacancy: Vacancy, verdict: Verdict, form: dict | None = None) -> str:
         parts.append("Из требований вне опыта: " + "; ".join(verdict.gaps[:2])
                      + ". Закрываю это на собственном стенде.")
 
+    if resume is None:
+        resume = profile.resume_for(verdict.track, vacancy.name, vacancy.haystack)
+    parts.append(salary_line(salary_track_for_resume(resume)))
     parts.append(CLOSING)
     return "\n\n".join(parts)

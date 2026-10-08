@@ -11,11 +11,13 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from scout import collector, runner, store, tracker_link
+from scout import collector, runner, store, telegram_worker, tracker_link
 from scout.analysis import analyze_find
+from scout.application_plan import preview
 from scout.demo import demo_vacancies
 from scout.hh import Vacancy
 from scout.letter import draft
+from scout.policy import select_mix
 from scout.scoring import score
 
 app = FastAPI(title="Разведчик вакансий", version="2.0.0")
@@ -30,6 +32,12 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent
 def on_startup() -> None:
     store.init()
     runner.resume_if_enabled()
+    telegram_worker.start_if_configured()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    telegram_worker.stop()
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -72,8 +80,6 @@ def save_settings(payload: Settings):
 
 @app.post("/api/scout/start", tags=["скаутинг"])
 def scout_start():
-    if not store.get_setting("search_url"):
-        raise HTTPException(400, "Сначала укажите ссылку на выдачу hh")
     return runner.start()
 
 
@@ -112,6 +118,27 @@ def scout_scan():
 @app.get("/api/finds", tags=["находки"])
 def get_finds(status: str | None = Query(default=None)):
     return store.list_finds(status)
+
+
+@app.get("/api/finds/curated", tags=["находки"])
+def curated(limit: int = Query(default=30, ge=1, le=100)):
+    """Короткая актуальная выдача с долями 60/30/10."""
+    return select_mix(store.list_finds(), limit=limit)
+
+
+@app.get("/api/applications/preview", tags=["отклики"])
+def application_preview(limit: int = Query(default=30, ge=1, le=100)):
+    """Показывает готовность кандидатов. Отклики не отправляет."""
+    from scout import response_form
+    items = preview(store.list_finds(), response_form.all_forms(), limit=limit)
+    return {"mode": "dry-run", "items": items,
+            "ready": sum(item["eligible"] for item in items)}
+
+
+@app.post("/api/letters/prepare", tags=["находки"])
+def prepare_letters(limit: int = Query(default=10, ge=1, le=30)):
+    """Готовит письма отдельной AI-фазой, когда Claude доступен через VPN."""
+    return runner.prepare_letters(limit)
 
 
 @app.post("/api/finds/{vacancy_id}/analyze", tags=["находки"])

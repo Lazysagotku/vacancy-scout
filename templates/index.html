@@ -233,7 +233,8 @@
   </section>
 
   <div class="tabs" id="tabs">
-    <button data-tab="new" class="active">Найдено скаутом</button>
+    <button data-tab="curated" class="active">Рекомендовано</button>
+    <button data-tab="new">Найдено скаутом</button>
     <button data-tab="analyzed">Разобрано</button>
     <button data-tab="tracked">В трекере</button>
       <button data-tab="dropped">Отсеяно</button>
@@ -247,7 +248,7 @@
 
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-let tab = "new";
+let tab = "curated";
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -378,6 +379,7 @@ function card(v, demo) {
     '</div>' +
     '<div class="meta"><span class="money">' + esc(money) + '</span>' +
       (v.track ? '<span>трек: ' + esc(v.track) + '</span>' : "") +
+      (v.query ? '<span>источник: ' + esc(v.query) + '</span>' : "") +
       (v.resume ? '<span class="resume">резюме: ' + esc(v.resume) + '</span>' : "") +
       // Описание уже загружено - разбор пойдёт без похода на hh
       (v.status === "new" && v.description ? '<span class="ready">описание есть</span>' : "") +
@@ -417,14 +419,15 @@ async function load() {
       list.innerHTML = items.map(v => card(v, true)).join("");
       return;
     }
-    const items = await api("/api/finds?status=" + tab);
+    const items = await api(tab === "curated" ? "/api/finds/curated?limit=30" : "/api/finds?status=" + tab);
     if (items.length && tab === "analyzed") {
       list.innerHTML = grouped(items);
     } else if (items.length) {
       list.innerHTML = items.map(v => card(v, false)).join("");
     } else {
       list.innerHTML = '<div class="empty">' +
-        (tab === "new" ? "Скаут пока ничего не нашёл. Укажите ссылку на выдачу и нажмите «Собрать сейчас»."
+        (tab === "curated" ? "Свежих подходящих вакансий пока нет. Проверь источники поиска и статус hh."
+         : tab === "new" ? "Скаут пока ничего не нашёл. Проверьте статус hh и нажмите «Собрать сейчас»."
          : tab === "dropped" ? "Отсеянных пока нет. Они попадают сюда и больше не мешают в основном списке."
          : "Пусто") +
         '</div>';

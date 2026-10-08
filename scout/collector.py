@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """Сбор вакансий с выдачи hh через локальный браузер.
 
-API hh для соискателей закрыт, поэтому идём тем же путём, что и человек:
-открываем страницу выдачи и читаем карточки. Отсюда два следствия.
+Это существующий браузерный сборщик. Официальный hh API поддерживает поиск
+и отклики, поэтому перед живой автоматической отправкой нужен переход на API.
+Доступность сайта зависит от сетевого маршрута: VPN иногда помогает,
+а иногда приводит к проверке hh. Сервис сам маршруты не переключает.
 
-Первое: нужен включённый VPN - без него hh не отвечает. Если сбор упал,
-это первое, что стоит проверить.
-
-Второе: браузер поднимается со своим профилем и сессия hh в нём сохраняется
+Браузер поднимается со своим профилем и сессия hh в нём сохраняется
 между запусками. Первый раз может потребоваться войти вручную - для этого
 есть режим headless=False.
 """
@@ -18,6 +17,7 @@ import logging
 import random
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ EXTRACT = r"""
 
 
 class CollectError(RuntimeError):
-    """Сбор не удался - чаще всего выключен VPN или слетела сессия."""
+    """Сбор не удался - причина уточняется по ответу hh и сети."""
 
 
 def hit_vpn_check(page) -> bool:
@@ -105,6 +105,20 @@ def hit_vpn_check(page) -> bool:
 
 class VpnCheck(CollectError):
     """hh требует пройти проверку VPN - нужен человек."""
+
+
+def _validate_search_url(url: str) -> str:
+    """Браузер открывает только HTTPS-страницы hh, не произвольные адреса."""
+    try:
+        parsed = urlsplit(url.strip())
+        host = parsed.hostname or ""
+        valid = (parsed.scheme == "https" and (host == "hh.ru" or host.endswith(".hh.ru"))
+                 and parsed.port in (None, 443) and not parsed.username and not parsed.password)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise CollectError("Источник должен быть HTTPS-ссылкой на hh.ru")
+    return url.strip()
 
 
 def _page_url(search_url: str, number: int) -> str:
@@ -127,8 +141,7 @@ def collect(search_url: str, pages: int = MAX_PAGES, headless: bool = True,
     """
     if not search_url.strip():
         raise CollectError("Не задана ссылка на выдачу hh - укажите её в настройках.")
-    if not search_url.startswith("http"):
-        raise CollectError("Ссылка не начинается с http - проверь строку в настройках.")
+    search_url = _validate_search_url(search_url)
 
     from playwright.sync_api import sync_playwright
 
@@ -178,12 +191,12 @@ def short_error(error: Exception) -> str:
     текст уходит в лог, человеку - одна строка с тем, что делать.
     """
     text = str(error)
-    log.warning("сборщик: %s", text[:2000])
+    log.warning("Сбой браузерного сбора: %s", type(error).__name__)
     checks = (
         ("invalid URL", "Ссылка не открывается - проверь, что каждая ссылка на своей строке."),
         ("vpncheeck", "hh просит пройти проверку VPN - открой браузер кнопкой «Войти в hh»."),
-        ("Timeout", "hh не ответил за 45 секунд - выключен VPN или лежит сеть."),
-        ("net::ERR_", "Нет сети до hh - выключен VPN или лежит сеть."),
+        ("Timeout", "hh не ответил за 45 секунд - проверь маршрут к hh с VPN и без VPN."),
+        ("net::ERR_", "Нет сети до hh - проверь маршрут к hh с VPN и без VPN."),
         ("ProcessSingleton", "Браузер разведчика уже открыт другим процессом - подожди минуту."),
         ("Target page, context or browser has been closed", "Окно браузера закрылось во время сбора."),
     )

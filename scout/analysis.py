@@ -13,12 +13,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 
 from scout import collector, profile, store, writer
 from scout.hh import Vacancy
 from scout.letter import draft
+from scout.policy import salary_line, salary_track_for_resume
 from scout.scoring import score
+
+log = logging.getLogger(__name__)
 
 # Письмо пишется всем, кроме явно мимо: Иван 12.09 - «сопрод не пишешь
 # только тем, с которыми очень много несостыковок», «брать количеством».
@@ -98,7 +102,7 @@ def _save(find: dict, description: str, write_letter: bool = True) -> dict:
     )
     # Шаблон - страховка: без VPN, без claude.exe, при лимите письмо всё равно есть
     if find.get("letter_kind") != "claude":
-        fields["letter"] = draft(vacancy, verdict, form)
+        fields["letter"] = draft(vacancy, verdict, form, resume)
         fields["letter_kind"] = "template"
     if write_letter and verdict.score >= LETTER_MIN_SCORE and description:
         written = writer.compose(vacancy, verdict, resume, form, extra=_page_fields(find))
@@ -129,7 +133,7 @@ def write_letter(find: dict) -> dict | None:
     return store.get_find(find["id"])
 
 
-def catch_up_letters(budget: int, on_progress=None) -> int:
+def catch_up_letters(budget: int, on_progress=None, now: datetime | None = None) -> int:
     """Письма для уже разобранных находок без письма Claude - лучшие первыми.
 
     Иван 14.09: «к рекомендую сразу пиши сопрод, чтобы я кнопку не жал и не ждал».
@@ -138,9 +142,35 @@ def catch_up_letters(budget: int, on_progress=None) -> int:
     """
     if budget <= 0:
         return 0
+    now = now or datetime.now()
+
+    def fresh(find: dict) -> bool:
+        try:
+            found = datetime.fromisoformat(find.get("found_at") or "")
+            analyzed = datetime.fromisoformat(find.get("analyzed_at") or "")
+            return (timedelta(0) <= now - found <= timedelta(hours=72)
+                    and timedelta(0) <= now - analyzed <= timedelta(hours=72))
+        except (TypeError, ValueError):
+            return False
+
+    def needs_letter(find: dict) -> bool:
+        if find.get("letter_kind") != "claude":
+            return True
+        letter = find.get("letter") or ""
+        if not writer._looks_like_letter(letter):
+            return True
+        # Зарплатная строка сверяется с приложенным резюме, а не с треком
+        # политики: письмо писалось под резюме, и при расхождении двух
+        # классификаторов (0,8% находок: «Technical support engineer» с
+        # Python-резюме) письмо иначе переписывалось бы на каждом прогоне.
+        resume = find.get("resume") or ""
+        if not resume:
+            return True
+        return salary_line(salary_track_for_resume(resume)) not in letter
+
     todo = [f for f in store.list_finds("analyzed")
-            if f.get("letter_kind") != "claude" and (f.get("score") or 0) >= AUTO_LETTER_SCORE
-            and (f.get("description") or "")]
+            if needs_letter(f) and (f.get("score") or 0) >= AUTO_LETTER_SCORE
+            and (f.get("description") or "") and not f.get("archived_at") and fresh(f)]
     todo.sort(key=lambda f: -(f.get("score") or 0))
     done = 0
     for number, find in enumerate(todo[:budget], start=1):
@@ -163,7 +193,7 @@ def analyze_find(vacancy_id: str, deep: bool = True) -> dict:
         find = save_page(find, details)
         if find.get("status") == "dropped":
             return find
-    return _save(find, find.get("description") or "")
+    return _save(find, find.get("description") or "", write_letter=False)
 
 
 def peek_forms(finds: list[dict], limit: int = 8) -> int:
@@ -209,7 +239,14 @@ def analyze_many(finds: list[dict], on_progress=None, letter_budget: int = 20) -
         description = find.get("description") or ""
         if not description:
             continue                                  # страница не отдалась - в следующий раз
-        analyzed.append(_save(find, description, write_letter=False))
+        try:
+            analyzed.append(_save(find, description, write_letter=False))
+        except Exception as problem:
+            # Одна сломанная карточка не должна останавливать пачку: раньше
+            # исключение на любой вакансии поднималось до analyze_batch,
+            # прогон возвращал ноль, и та же карточка валила каждый следующий
+            # проход. В лог - только тип, без текста вакансии.
+            log.error("разбор %s прерван: %s", find.get("id"), type(problem).__name__)
 
     # Письма: лучшие первыми, в пределах бюджета. Уже написанные не трогаем.
     worth = sorted((f for f in analyzed

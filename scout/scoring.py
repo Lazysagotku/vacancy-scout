@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import re
 
 from scout import profile
+from scout.policy import salary_floor_for_find
 from scout.hh import Vacancy
 
 
@@ -129,7 +130,8 @@ def score(vacancy: Vacancy) -> Verdict:
             value += 15
         value = min(100, value)
     top = vacancy.salary_to or vacancy.salary_from
-    if top and top < profile.SALARY_FLOOR:
+    floor = salary_floor_for_find({"name": vacancy.name, "description": vacancy.description}, profile.SALARY_FLOOR)
+    if top and top < floor:
         value = max(0, value - 15)
         notes.append(f"вилка ниже планки: {vacancy.salary_text}")
     if not top:
