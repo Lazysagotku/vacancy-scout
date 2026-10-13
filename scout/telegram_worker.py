@@ -114,9 +114,11 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
     from scout.question_plan import pending_questions
 
     offset: int | None = None
+    misses = 0
     while not _stop.is_set():
         try:
             updates = bot.get_updates(offset=offset, timeout=10)
+            misses = 0
             for update in updates:
                 update_id = update.get("update_id") if isinstance(update, dict) else None
                 if isinstance(update_id, int):
@@ -132,8 +134,14 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
                     apply_run=lambda: apply.apply_batch(limit=5, dry_run=not apply.live_allowed()),
                 )
         except TelegramError:
-            log.warning("Telegram API недоступен")
-            _stop.wait(15)
+            # Без VPN Telegram недоступен, и опрос падает каждые 15 секунд -
+            # лог забивался одинаковыми строками. Пауза растёт до пяти минут,
+            # а в лог идёт только первая неудача и каждая десятая.
+            misses += 1
+            if misses == 1 or misses % 10 == 0:
+                log.warning("Telegram API недоступен (подряд: %d)", misses)
+            _stop.wait(min(15 * misses, 300))
+            continue
         except Exception:
             log.exception("Ошибка обработчика Telegram без содержимого сообщения")
             _stop.wait(15)
