@@ -234,8 +234,15 @@ def resume_for(track: str | None, title: str = "", description: str = "") -> str
     body = (description or "").lower()
 
     # 1. Заголовок называет роль прямо
+    #
+    # Исключения были только русскими, а `engineer` стоит в ролях разработчика -
+    # поэтому «Senior Support Engineer» получал C#-резюме на вакансию поддержки.
+    # На базе из 7675 находок так ошиблись 44 карточки support-трека.
     if any(w in head for w in DEV_ROLE_WORDS) and not any(
-            w in head for w in ("devops", "sre", "поддержк", "сопровожден", "эксплуатац")):
+            w in head for w in ("devops", "sre", "поддержк", "сопровожден", "эксплуатац",
+                                "support", "администратор", "administrator", "sysadmin",
+                                "operations", "reliability", "helpdesk", "service desk",
+                                "l1", "l2", "l3", "техподдержк")):
         # C# по умолчанию: он основной на последнем месте, Python - инструмент автоматизации
         return RESUMES[dev_lang(title, description) or "csharp"]
     if any(w in head for w in ("devops", "sre", "инфраструктур", "администратор",

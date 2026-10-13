@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 _worker_thread: threading.Thread | None = None
 _stop = threading.Event()
 _start_lock = threading.Lock()
-COMMANDS = {"/start", "/status", "/preview", "/prepare", "/questions"}
+COMMANDS = {"/start", "/status", "/preview", "/prepare", "/questions", "/login", "/apply"}
 
 
 def allowed_command(update: dict, allowed_chat_id: int,
@@ -36,17 +36,40 @@ def allowed_command(update: dict, allowed_chat_id: int,
             or not isinstance(stamp, int) or not isinstance(text, str)
             or len(text) > 64 or not 0 <= now.timestamp() - stamp <= 120):
         return None
-    return text if text in COMMANDS else None
+    if text in COMMANDS:
+        return text
+    # Пока идёт вход в hh, короткий текст - это ответ человека: код из цифр
+    # или разгадка картинки. Остальные сообщения по-прежнему игнорируются.
+    from scout import hh_login
+    if hh_login.awaiting() is not None and 1 <= len(text) <= 32:
+        return "::answer::" + text
+    return None
 
 
 def handle_update(update: dict, allowed_chat_id: int, send,
                   status, preview, now: datetime | None = None,
-                  prepare=None, questions=None) -> bool:
+                  prepare=None, questions=None, login=None, apply_run=None) -> bool:
     command = allowed_command(update, allowed_chat_id, now=now)
     if command is None:
         return False
+    if command.startswith("::answer::"):
+        from scout import hh_login
+        outcome = hh_login.deliver(command[len("::answer::"):])
+        send(allowed_chat_id, outcome["note"])
+        return True
+    if command == "/login":
+        outcome = login() if login else {"ok": False, "note": "Вход не настроен"}
+        send(allowed_chat_id, "Вход запущен, жди снимок экрана."
+             if outcome.get("started") else str(outcome.get("note") or "Вход недоступен"))
+        return True
+    if command == "/apply":
+        outcome = apply_run() if apply_run else {"mode": "dry-run", "ready": 0, "results": []}
+        sent = sum(1 for item in outcome.get("results", []) if item.get("sent"))
+        send(allowed_chat_id, f"Отклики, режим {outcome.get('mode')}: готовых "
+             f"{outcome.get('ready', 0)}, отправлено {sent}.")
+        return True
     if command == "/start":
-        message = "Приватный бот разведчика подключён. Команды: /status, /preview, /prepare, /questions."
+        message = "Приватный бот разведчика подключён. Команды: /status, /preview, /prepare, /questions, /login, /apply."
     elif command == "/status":
         state = status()
         mode = "работает" if state.get("running") else "остановлен"
@@ -86,7 +109,7 @@ def handle_update(update: dict, allowed_chat_id: int, send,
 
 
 def _poll(bot: TelegramClient, chat_id: int) -> None:
-    from scout import response_form, runner, store
+    from scout import apply, response_form, runner, store
     from scout.application_plan import preview as application_preview
     from scout.question_plan import pending_questions
 
@@ -103,6 +126,10 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
                     lambda: application_preview(store.list_finds(), response_form.all_forms()),
                     prepare=runner.prepare_letters,
                     questions=lambda: pending_questions(store.list_finds(), response_form.all_forms()),
+                    login=lambda: runner.start_login(
+                        lambda png, caption: bot.send_photo(chat_id, png, caption),
+                        lambda text: bot.send_message(chat_id, text)),
+                    apply_run=lambda: apply.apply_batch(limit=5, dry_run=not apply.live_allowed()),
                 )
         except TelegramError:
             log.warning("Telegram API недоступен")

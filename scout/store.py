@@ -56,6 +56,22 @@ CREATE TABLE IF NOT EXISTS runs (
     error     TEXT
 );
 
+-- Журнал откликов (13.10). Отдельная таблица, а не поле в finds: нужна история
+-- решений и ответов hh, в том числе по неудачным попыткам. Уникальный
+-- vacancy_id - страховка от второго отклика при повторном запуске.
+CREATE TABLE IF NOT EXISTS applications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    vacancy_id  TEXT NOT NULL UNIQUE,
+    decided_at  TEXT NOT NULL,          -- когда приняли решение
+    mode        TEXT NOT NULL,          -- dry-run | live
+    outcome     TEXT NOT NULL,          -- planned | sent | blocked | failed
+    reason      TEXT,                   -- почему заблокирован или чем упал
+    resume      TEXT,                   -- какое резюме приложили
+    letter_len  INTEGER,                -- длина письма, для контроля без текста
+    answers     TEXT,                   -- чем ответили на вопросы формы, JSON
+    sent_at     TEXT
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -109,6 +125,11 @@ LATER_COLUMNS = {
     # 14.09: закреплённые Иваном сверху и мнение отдельным полем для группировки
     "pinned_at":        "TEXT",              # нажал «переписать под вакансию» - карточка держится вверху
     "opinion":          "TEXT",              # Рекомендую | Под вопросом + | Под вопросом | Под вопросом - | Не рекомендую
+    # 13.10: перепроверка живости вакансии. Находка живёт в базе месяцами,
+    # а вакансия на hh закрывается за неделю - короткий список наполнялся
+    # архивными карточками и теми, что отдают 404.
+    "checked_at":       "TEXT",              # когда последний раз смотрели страницу
+    "check_misses":     "INTEGER DEFAULT 0", # сколько раз подряд страница не открылась
 }
 
 
@@ -235,3 +256,47 @@ def last_runs(limit: int = 5) -> list[dict]:
     with connect() as con:
         return [dict(r) for r in con.execute(
             "SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,))]
+
+
+# --- журнал откликов -------------------------------------------------------
+
+def application(vacancy_id: str) -> dict | None:
+    """Запись журнала по вакансии или None, если отклика ещё не было."""
+    with connect() as con:
+        row = con.execute("SELECT * FROM applications WHERE vacancy_id = ?",
+                          (vacancy_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def log_application(vacancy_id: str, mode: str, outcome: str, **fields) -> dict:
+    """Записать решение по отклику.
+
+    Уникальность по вакансии держит база, поэтому повторный запуск не создаёт
+    второй отклик даже при гонке двух запусков: вторая вставка обновит ту же
+    строку, а не добавит новую.
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    row = {
+        "vacancy_id": vacancy_id, "decided_at": now, "mode": mode, "outcome": outcome,
+        "reason": fields.get("reason"), "resume": fields.get("resume"),
+        "letter_len": fields.get("letter_len"), "answers": fields.get("answers"),
+        "sent_at": fields.get("sent_at"),
+    }
+    keys = ", ".join(row)
+    marks = ", ".join("?" for _ in row)
+    updates = ", ".join(f"{k}=excluded.{k}" for k in row if k != "vacancy_id")
+    with connect() as con:
+        con.execute(
+            f"INSERT INTO applications ({keys}) VALUES ({marks}) "
+            f"ON CONFLICT(vacancy_id) DO UPDATE SET {updates}",
+            tuple(row.values()),
+        )
+    return row
+
+
+def applications(limit: int = 100) -> list[dict]:
+    with connect() as con:
+        rows = con.execute(
+            "SELECT * FROM applications ORDER BY decided_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(row) for row in rows]

@@ -62,8 +62,20 @@ def evaluate(find: dict, form: dict | None = None, now: datetime | None = None) 
     if form is None or not _recent(form.get("checked_at"), now):
         reasons.append("Форма отклика не проверена")
     else:
-        if form.get("questions") or form.get("has_questions_flag"):
-            reasons.append("Форма требует ответа")
+        # Анкета с вопросами больше не блокирует отклик целиком: известные
+        # ответы берутся из политики (зарплата по резюме, портфолио). Блокируют
+        # только вопросы, ответа на которые в фактах нет - отвечать за человека
+        # наугад нельзя, ответ уходит работодателю от его имени.
+        from scout.question_plan import plan_answers
+        unknown = [item for item in plan_answers(find, form)
+                   if item.get("status") != "suggested"]
+        if unknown:
+            asked = (unknown[0].get("question") or "").strip()
+            reasons.append("Форма требует ответа: " + asked[:60] if asked
+                           else "Форма требует ответа")
+        elif form.get("has_questions_flag") and not form.get("questions"):
+            # hh сказал, что вопросы есть, а прочитать их не удалось.
+            reasons.append("Форма требует ответа: вопросы не прочитаны")
         if not form.get("has_letter"):
             reasons.append("Поле письма не подтверждено")
         if form.get("note") and form["note"] != "Дополнительных вопросов нет: только выбор резюме и сопроводительное письмо":

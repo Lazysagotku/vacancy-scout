@@ -296,3 +296,52 @@ def prepare_letters(limit: int = 10) -> dict:
             _state.preparing = False
         raise
     return {"started": True, "limit": limit}
+
+
+_login_thread: threading.Thread | None = None
+
+
+def start_login(send_photo, send_message) -> dict:
+    """Запустить вход в hh в отдельном потоке: он ждёт ответа человека.
+
+    Опрос Telegram не должен стоять, пока браузер ждёт код, поэтому вход живёт
+    своим потоком, а ответ приходит через `hh_login.deliver`.
+    """
+    global _login_thread
+    from scout import hh_login
+
+    if _login_thread and _login_thread.is_alive():
+        return {"started": False, "note": "Вход уже идёт"}
+
+    def run() -> None:
+        try:
+            hh_login.login(send_photo, send_message)
+        except Exception as problem:
+            log.error("Вход в hh прерван: %s", type(problem).__name__)
+            try:
+                send_message(f"Вход прерван: {type(problem).__name__}")
+            except Exception:
+                pass
+
+    _login_thread = threading.Thread(target=run, daemon=True, name="scout-hh-login")
+    _login_thread.start()
+    return {"started": True}
+
+
+def recheck_once(limit: int = 40) -> dict:
+    """Перепроверка разобранных карточек: архив и недоступные страницы."""
+    from scout import recheck
+
+    with _lock:
+        if _state.busy or _state.preparing:
+            return {"skipped": "сбор или подготовка уже идёт"}
+        _state.busy = True
+    try:
+        def progress(done: int, total: int, stage: str = "перепроверка") -> None:
+            with _lock:
+                _state.stage = f"{stage} {done} из {total}"
+        return recheck.recheck(limit=limit, on_progress=progress)
+    finally:
+        with _lock:
+            _state.busy = False
+            _state.stage = ""

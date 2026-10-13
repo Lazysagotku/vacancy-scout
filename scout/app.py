@@ -135,6 +135,33 @@ def application_preview(limit: int = Query(default=30, ge=1, le=100)):
             "ready": sum(item["eligible"] for item in items)}
 
 
+@app.post("/api/finds/recheck", tags=["находки"])
+def recheck_finds(limit: int = Query(default=40, ge=1, le=200)):
+    """Перепроверяет разобранные карточки: архив и страницы, которые не открываются."""
+    return runner.recheck_once(limit)
+
+
+@app.post("/api/finds/refresh-resumes", tags=["находки"])
+def refresh_resumes(apply_changes: bool = Query(default=False)):
+    """Пересчитывает приложенное резюме по текущим правилам. Без флага - только показывает."""
+    from scout import recheck
+    return recheck.refresh_resumes(dry_run=not apply_changes)
+
+
+@app.get("/api/applications", tags=["отклики"])
+def application_log(limit: int = Query(default=100, ge=1, le=500)):
+    """Журнал решений по откликам, включая заблокированные и неудачные."""
+    return store.applications(limit)
+
+
+@app.post("/api/applications/send", tags=["отклики"])
+def send_applications(limit: int = Query(default=5, ge=1, le=20),
+                      live: bool = Query(default=False)):
+    """Отправка откликов. Живой режим требует и флага, и настройки live_apply=1."""
+    from scout import apply
+    return apply.apply_batch(limit=limit, dry_run=not live)
+
+
 @app.post("/api/letters/prepare", tags=["находки"])
 def prepare_letters(limit: int = Query(default=10, ge=1, le=30)):
     """Готовит письма отдельной AI-фазой, когда Claude доступен через VPN."""
