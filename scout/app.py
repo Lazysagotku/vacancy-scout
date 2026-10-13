@@ -148,6 +148,18 @@ def refresh_resumes(apply_changes: bool = Query(default=False)):
     return recheck.refresh_resumes(dry_run=not apply_changes)
 
 
+@app.post("/api/forms/peek", tags=["отклики"])
+def peek_response_forms(limit: int = Query(default=8, ge=1, le=30)):
+    """Разведка форм отклика у лучших карточек. Отклик не отправляется.
+
+    Делается отдельной командой, а не в каждом проходе сбора: открытие формы -
+    это клик по кнопке отклика на hh, и делать его сотни раз подряд незачем.
+    """
+    from scout.analysis import peek_forms
+    checked = peek_forms(store.list_finds("analyzed"), limit=limit)
+    return {"checked": checked, "sent": False}
+
+
 @app.get("/api/applications", tags=["отклики"])
 def application_log(limit: int = Query(default=100, ge=1, le=500)):
     """Журнал решений по откликам, включая заблокированные и неудачные."""
