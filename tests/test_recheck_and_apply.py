@@ -65,6 +65,24 @@ class RecheckTests(unittest.TestCase):
         order = [item["id"] for item in recheck.stale_first([newer, old], now=NOW)]
         self.assertEqual(order, ["1", "2"])
 
+    def test_short_list_card_is_checked_before_the_tail(self):
+        # Видимая карточка проверялась два дня назад, невидимая - девять.
+        # По старому правилу «самая протухшая вперёд» первой шла невидимая,
+        # и короткий список оставался непроверенным.
+        visible = find(id="vis", score=80, found_at=(NOW - timedelta(days=2)).isoformat(),
+                       checked_at=(NOW - timedelta(days=2)).isoformat())
+        tail = find(id="tail", score=80, found_at=(NOW - timedelta(days=40)).isoformat(),
+                    checked_at=(NOW - timedelta(days=9)).isoformat())
+        order = [item["id"] for item in recheck.stale_first([tail, visible], now=NOW)]
+        self.assertEqual(order, ["vis", "tail"])
+
+    def test_weak_card_is_not_treated_as_visible(self):
+        # Балл ниже порога короткой выдачи - карточку человек не видит.
+        weak = find(score=10, found_at=NOW.isoformat())
+        self.assertFalse(recheck.on_short_list(weak, NOW))
+        strong = find(score=80, found_at=NOW.isoformat())
+        self.assertTrue(recheck.on_short_list(strong, NOW))
+
     def test_archived_vacancy_is_dropped(self):
         fields = recheck.verdict_for(find(), {"archived_at": "5 октября"})
         self.assertEqual(fields["status"], "dropped")

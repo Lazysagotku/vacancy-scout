@@ -31,6 +31,8 @@ class State:
     last_fresh: int = 0
     last_analyzed: int = 0         # сколько разобрал в последнем проходе
     last_forms: int = 0            # у скольких снял вопросы формы отклика
+    last_rechecked: int = 0        # сколько карточек перепроверил на живость
+    last_archived: int = 0         # сколько из них оказались в архиве
     last_error: str | None = None
     last_note: str | None = None   # не ошибка, но человеку знать надо: сессия hh, пропущенная строка
     authorized: bool | None = None # жива ли сессия hh у браузера скаута
@@ -213,10 +215,39 @@ def _loop() -> None:
             if not _state.running:
                 return
         scan_once()
+        _recheck_after_scan()
         minutes = int(store.get_setting("interval_minutes", "180"))
         # Ждём с прерыванием: остановка не должна ждать конца интервала
         if _wake.wait(timeout=minutes * 60):
             _wake.clear()
+
+
+def _recheck_after_scan() -> None:
+    """Перепроверка живости сразу после сбора, в том же цикле и браузере.
+
+    Вакансия закрывается быстрее, чем карточка стареет: YADRO нашлась 12
+    сентября, а ушла в архив 12 октября, и месяц висела в списке живой. Пока
+    перепроверка жила только на кнопке, из 5862 разобранных проверены были 30.
+
+    Сбоя перепроверки хватит, чтобы остановить цикл сбора, поэтому ошибка сюда
+    не выпускает - сбор важнее.
+    """
+    with _lock:
+        if not _state.running:
+            return
+    limit = int(store.get_setting("recheck_limit", "40"))
+    if limit <= 0:
+        return
+    try:
+        counts = recheck_once(limit)
+    except Exception:
+        log.exception("Перепроверка живости прервана")
+        return
+    if "skipped" in counts:
+        return
+    with _lock:
+        _state.last_rechecked = counts.get("checked", 0)
+        _state.last_archived = counts.get("archived", 0)
 
 
 def start() -> dict:

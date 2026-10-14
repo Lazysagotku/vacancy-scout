@@ -63,6 +63,7 @@ class Settings(BaseModel):
     interval_minutes: int | None = None
     analyze_limit: int | None = None
     letter_limit: int | None = None
+    recheck_limit: int | None = None
 
 
 @app.post("/api/settings", tags=["скаутинг"])
@@ -75,6 +76,9 @@ def save_settings(payload: Settings):
         store.set_setting("analyze_limit", max(0, min(300, payload.analyze_limit)))
     if payload.letter_limit is not None:
         store.set_setting("letter_limit", max(0, min(100, payload.letter_limit)))
+    if payload.recheck_limit is not None:
+        # 0 выключает перепроверку живости в цикле сбора.
+        store.set_setting("recheck_limit", max(0, min(200, payload.recheck_limit)))
     return runner.status()
 
 

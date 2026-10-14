@@ -149,6 +149,9 @@
   /* Какое резюме прикладывать - выделяем, это решение перед откликом */
   .meta .resume { background: var(--strong-bg); color: var(--strong-ink); font-weight: 600; }
   .meta .ready { background: var(--maybe-bg); color: var(--maybe-ink); font-weight: 600; }
+  /* Возраст и живость: вакансия закрывается быстрее, чем карточка стареет */
+  .meta .dead { background: var(--skip-bg); color: var(--skip-ink); font-weight: 600; }
+  .meta .unchecked { color: var(--skip-ink); }
   .title-link { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--line); }
   .title-link:hover { color: var(--accent-deep); border-bottom-color: var(--accent); }
   .review { margin-top: 0.6rem; background: var(--accent-soft); border: 1px solid var(--line);
@@ -338,6 +341,37 @@ function grouped(items) {
     buckets[k].map(v => card(v, false)).join("") + '</div>').join("");
 }
 
+/** Сколько полных суток прошло с момента в ISO. null, если даты нет. */
+function daysSince(iso) {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (isNaN(at)) return null;
+  return Math.floor((Date.now() - at) / 86400000);
+}
+function ago(days) {
+  if (days <= 0) return "сегодня";
+  if (days === 1) return "вчера";
+  return days + " дн. назад";
+}
+/**
+ * Возраст находки и состояние проверки живости.
+ *
+ * Без этой подписи карточка месячной давности выглядит так же, как
+ * сегодняшняя: YADRO нашлась 12 сентября, ушла в архив 12 октября и всё это
+ * время показывалась «сильным матчем». Непроверенную карточку старше недели
+ * подписываем предупреждением - открывать её стоит с оглядкой.
+ */
+function freshness(v) {
+  if (v.archived_at) return '<span class="dead">в архиве с ' + esc(v.archived_at) + '</span>';
+  const found = daysSince(v.found_at);
+  const checked = daysSince(v.checked_at);
+  if (found === null) return "";
+  const head = "найдена " + ago(found);
+  if (checked !== null) return '<span>' + head + " · жива, проверена " + ago(checked) + '</span>';
+  const css = found >= 7 ? ' class="unchecked"' : "";
+  return '<span' + css + '>' + head + " · на живость не проверялась</span>";
+}
+
 function card(v, demo) {
   const css = v.css || (v.verdict === "сильный матч" ? "strong" : v.verdict === "пропустить" ? "skip"
             : v.verdict === "стоит посмотреть" ? "maybe" : "weak");
@@ -384,6 +418,7 @@ function card(v, demo) {
       // Описание уже загружено - разбор пойдёт без похода на hh
       (v.status === "new" && v.description ? '<span class="ready">описание есть</span>' : "") +
       (v.experience ? '<span>опыт ' + esc(v.experience) + '</span>' : "") +
+      (demo ? "" : freshness(v)) +
       // Шапка со страницы hh: оформление, график, формат - то, что Иван
       // смотрит первым делом. Пока страница не открыта - только «удалёнка» из выдачи.
       (v.hiring ? '<span>' + esc(v.hiring) + '</span>' : "") +

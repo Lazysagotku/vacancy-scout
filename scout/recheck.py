@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timedelta
 
 from scout import profile, store
+from scout.policy import MAX_AGE_DAYS, MIN_SCORE
 
 log = logging.getLogger(__name__)
 
@@ -38,12 +39,30 @@ def _parsed(value: str | None) -> datetime | None:
         return None
 
 
+def on_short_list(find: dict, now: datetime) -> bool:
+    """Попадает ли карточка в короткую выдачу, которую человек видит.
+
+    Те же два условия, по которым её отбирает `policy.select_mix`: достаточный
+    балл и возраст в пределах окна выдачи. Проверять в первую очередь надо
+    именно их - мёртвая карточка в хвосте базы никому не показывается, а
+    мёртвая в рекомендациях стоит человеку впустую открытой вкладки.
+    """
+    if (find.get("score") or 0) < MIN_SCORE:
+        return False
+    found = _parsed(find.get("found_at"))
+    return found is not None and now - found <= timedelta(days=MAX_AGE_DAYS)
+
+
 def stale_first(finds: list[dict], now: datetime | None = None,
                 limit: int = BATCH) -> list[dict]:
     """Кого перепроверять: разобранные, живые, давно не смотренные.
 
-    Порядок - от самых старых проверок к свежим, чтобы каждый заход закрывал
-    самый протухший край базы.
+    Сначала идут карточки из короткой выдачи - их человек открывает. Внутри
+    каждой группы порядок от самых старых проверок к свежим, чтобы заход
+    закрывал самый протухший край.
+
+    Так видимые 280 карточек проходят полный круг меньше чем за сутки, а
+    остальные пять тысяч доедаются остатком пачки.
     """
     now = now or datetime.now()
     todo = []
@@ -53,9 +72,9 @@ def stale_first(finds: list[dict], now: datetime | None = None,
         seen = _parsed(find.get("checked_at")) or _parsed(find.get("analyzed_at"))
         if seen is None or now - seen < MIN_AGE:
             continue
-        todo.append((seen, find))
-    todo.sort(key=lambda pair: pair[0])
-    return [find for _, find in todo[:max(0, limit)]]
+        todo.append((0 if on_short_list(find, now) else 1, seen, find))
+    todo.sort(key=lambda row: (row[0], row[1]))
+    return [find for _, _, find in todo[:max(0, limit)]]
 
 
 def verdict_for(find: dict, details: dict | None) -> dict:
