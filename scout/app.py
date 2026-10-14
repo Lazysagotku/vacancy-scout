@@ -145,6 +145,13 @@ def recheck_finds(limit: int = Query(default=40, ge=1, le=200)):
     return runner.recheck_once(limit)
 
 
+@app.post("/api/finds/close-stale", tags=["находки"])
+def close_stale_finds(apply_changes: bool = Query(default=False, alias="apply")):
+    """Закрывает хвост базы по возрасту. Без ?apply=true только показывает, сколько."""
+    from scout import recheck
+    return recheck.close_stale(dry_run=not apply_changes)
+
+
 @app.post("/api/finds/refresh-resumes", tags=["находки"])
 def refresh_resumes(apply_changes: bool = Query(default=False)):
     """Пересчитывает приложенное резюме по текущим правилам. Без флага - только показывает."""

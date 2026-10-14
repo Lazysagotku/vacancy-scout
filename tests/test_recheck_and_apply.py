@@ -88,6 +88,37 @@ class RecheckTests(unittest.TestCase):
         self.assertEqual(fields["status"], "dropped")
         self.assertIn("архиве", fields["drop_reason"])
 
+    def test_unreachable_page_is_a_miss_not_a_live_vacancy(self):
+        # Сборщик на недоступной вакансии отдаёт не None, а пустой разбор.
+        # Проверка `details is None` его не ловила, и такая карточка
+        # записывалась живой с обнулённым счётчиком промахов.
+        empty = {"archived_at": "", "description": "", "title": ""}
+        self.assertTrue(recheck.page_missed(empty))
+        fields = recheck.verdict_for(find(), empty)
+        self.assertEqual(fields["check_misses"], 1)
+        self.assertNotIn("status", fields)
+
+    def test_page_with_description_is_alive(self):
+        alive = {"archived_at": "", "description": "Поддержка систем, Linux"}
+        self.assertFalse(recheck.page_missed(alive))
+        self.assertEqual(recheck.verdict_for(find(), alive)["check_misses"], 0)
+
+    def test_every_page_is_saved_before_the_batch_ends(self):
+        # Проверка VPN на последней карточке раньше выбрасывала труд по всем
+        # предыдущим: запись шла после всей пачки.
+        saved = []
+
+        def fetch(ids, on_progress=None, on_item=None):
+            on_item(ids[0], {"archived_at": "5 октября", "description": ""})
+            raise RuntimeError("hh просит пройти проверку VPN")
+
+        cards = [find(id="1"), find(id="2")]
+        with patch("scout.recheck.stale_first", return_value=cards),              patch("scout.recheck.store.list_finds", return_value=cards),              patch("scout.recheck.store.update_find",
+                   side_effect=lambda i, **f: saved.append((i, f["status"]))),              patch("scout.collector.fetch_details", side_effect=fetch):
+            with self.assertRaises(RuntimeError):
+                recheck.recheck(limit=2)
+        self.assertEqual(saved, [("1", "dropped")])
+
     def test_single_network_miss_keeps_the_card(self):
         fields = recheck.verdict_for(find(), None)
         self.assertNotIn("status", fields)
@@ -97,6 +128,43 @@ class RecheckTests(unittest.TestCase):
         fields = recheck.verdict_for(find(check_misses=2), None)
         self.assertEqual(fields["status"], "dropped")
         self.assertEqual(fields["check_misses"], 3)
+
+
+class CloseStaleTests(unittest.TestCase):
+    def old(self, **changes):
+        return find(found_at=(NOW - timedelta(days=40)).isoformat(), **changes)
+
+    def test_card_past_the_window_is_closed(self):
+        tail = recheck.stale_tail([self.old()], now=NOW)
+        self.assertEqual(len(tail), 1)
+
+    def test_fresh_card_is_left_alone(self):
+        self.assertEqual(recheck.stale_tail([find(found_at=NOW.isoformat())], now=NOW), [])
+
+    def test_pinned_card_is_never_closed_by_age(self):
+        # Закрепил человек руками - возраст такую карточку не трогает.
+        self.assertEqual(recheck.stale_tail([self.old(pinned_at=NOW.isoformat())], now=NOW), [])
+
+    def test_recently_confirmed_alive_card_is_kept(self):
+        seen = (NOW - timedelta(days=2)).isoformat()
+        self.assertEqual(recheck.stale_tail([self.old(checked_at=seen)], now=NOW), [])
+
+    def test_long_ago_checked_card_is_closed_again(self):
+        seen = (NOW - timedelta(days=30)).isoformat()
+        self.assertEqual(len(recheck.stale_tail([self.old(checked_at=seen)], now=NOW)), 1)
+
+    def test_dry_run_writes_nothing(self):
+        with patch("scout.recheck.store.list_finds", return_value=[self.old()]),              patch("scout.recheck.store.update_find") as write:
+            result = recheck.close_stale(now=NOW)
+        self.assertEqual(result["closed"], 1)
+        write.assert_not_called()
+
+    def test_reason_names_the_age(self):
+        with patch("scout.recheck.store.list_finds", return_value=[self.old()]),              patch("scout.recheck.store.update_find") as write:
+            recheck.close_stale(dry_run=False, now=NOW)
+        reason = write.call_args.kwargs["drop_reason"]
+        self.assertIn("устарела", reason)
+        self.assertIn("40 дн.", reason)
 
 
 class ApplyGuardTests(unittest.TestCase):

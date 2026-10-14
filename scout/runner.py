@@ -33,6 +33,7 @@ class State:
     last_forms: int = 0            # у скольких снял вопросы формы отклика
     last_rechecked: int = 0        # сколько карточек перепроверил на живость
     last_archived: int = 0         # сколько из них оказались в архиве
+    last_closed: int = 0           # сколько закрыл по возрасту
     last_error: str | None = None
     last_note: str | None = None   # не ошибка, но человеку знать надо: сессия hh, пропущенная строка
     authorized: bool | None = None # жива ли сессия hh у браузера скаута
@@ -248,6 +249,22 @@ def _recheck_after_scan() -> None:
     with _lock:
         _state.last_rechecked = counts.get("checked", 0)
         _state.last_archived = counts.get("archived", 0)
+
+    # Хвост закрывается по возрасту, а не проверкой: карточка старше окна
+    # выдачи мертва в двух случаях из трёх, и обойти пять тысяч таких
+    # браузером дороже, чем они стоят. Из базы они не исчезают - возвращаются
+    # кнопкой «Вернуть в список».
+    if store.get_setting("close_stale", "1") != "1":
+        return
+    try:
+        from scout import recheck
+        closed = recheck.close_stale(dry_run=False)
+        if closed["closed"]:
+            log.info("закрыто по возрасту: %s", closed["closed"])
+        with _lock:
+            _state.last_closed = closed["closed"]
+    except Exception:
+        log.exception("Закрытие хвоста по возрасту прервано")
 
 
 def start() -> dict:

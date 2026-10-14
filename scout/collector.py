@@ -384,7 +384,7 @@ def _tidy(raw: dict) -> dict:
 
 
 def fetch_details(vacancy_ids: list[str], headless: bool = True,
-                  on_progress=None) -> dict[str, dict]:
+                  on_progress=None, on_item=None) -> dict[str, dict]:
     """Читает страницы вакансий пачкой в одном браузере.
 
     Профиль браузера лежит на диске и блокируется при открытии, поэтому
@@ -394,6 +394,10 @@ def fetch_details(vacancy_ids: list[str], headless: bool = True,
     На выходе по каждому id словарь из _tidy. Пустое описание у живой
     вакансии - страница не отдалась; у архивной - archived_at заполнен,
     и описание там не нужно.
+
+    `on_item(id, details)` вызывается сразу после каждой прочитанной страницы.
+    Через него вызывающий сохраняет результат по ходу: проверка VPN на сто
+    девятнадцатой карточке иначе выбрасывала всю пачку целиком.
     """
     from playwright.sync_api import sync_playwright
 
@@ -435,6 +439,8 @@ def fetch_details(vacancy_ids: list[str], headless: bool = True,
                 except Exception as error:
                     log.warning("вакансия %s не прочиталась: %s", vacancy_id, str(error)[:300])
                     result[vacancy_id] = _tidy({})   # одна недоступная не должна рвать пачку
+                if on_item:
+                    on_item(vacancy_id, result[vacancy_id])
                 if on_progress:
                     on_progress(len(result), len(vacancy_ids))
                 pause(page)
