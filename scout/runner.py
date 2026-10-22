@@ -220,6 +220,7 @@ def _loop() -> None:
         scan_once()
         _recheck_after_scan()
         _letters_after_scan()
+        _forms_after_letters()
         _apply_after_scan()
         _learn_after_apply()
         minutes = int(store.get_setting("interval_minutes", "180"))
@@ -293,6 +294,32 @@ def _letters_after_scan() -> None:
             log.info("написано писем: %s", written)
     except Exception:
         log.exception("Подготовка писем прервана")
+
+
+def _forms_after_letters() -> None:
+    """Разведать форму отклика у кандидатов.
+
+    Ворота отправки требуют формы не старше 72 часов, поэтому шаг идёт каждый
+    круг. Без него круг откликов всегда упирается в «Форма отклика не
+    проверена».
+    """
+    with _lock:
+        if not _state.running or _state.busy:
+            return
+    if store.get_setting("auto_apply", "0") != "1":
+        return
+    try:
+        from scout.analysis import peek_forms
+        from scout.application_plan import SENDABLE_OPINIONS
+        cards = [f for f in store.list_finds("analyzed")
+                 if (f.get("opinion") or "") in SENDABLE_OPINIONS]
+        checked = peek_forms(cards, limit=12)
+        with _lock:
+            _state.last_forms = checked
+        if checked:
+            log.info("разведано форм: %s", checked)
+    except Exception:
+        log.exception("Разведка форм прервана")
 
 
 def _apply_after_scan() -> None:

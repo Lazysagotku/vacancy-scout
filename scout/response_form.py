@@ -41,18 +41,47 @@ EXTRACT = r"""
   out.resumes = [...document.querySelectorAll('[data-qa*="resume"] , [name="resume_hash"]')]
     .map(el => clean(el.innerText || el.value)).filter(Boolean).slice(0, 10);
 
-  // Поле сопроводительного письма
-  out.hasLetter = !!document.querySelector('textarea[data-qa*="letter"], textarea[name*="letter"], [data-qa="vacancy-response-popup-form-letter-input"]');
+  // Поле сопроводительного письма. На части вакансий оно появляется только
+  // после нажатия «Добавить сопроводительное», поэтому наличие такой кнопки
+  // считается тем же самым: заполнитель формы её нажмёт перед вводом.
+  const letterField = document.querySelector(
+    'textarea[data-qa*="letter"], textarea[name*="letter"], [data-qa*="letter"], ' +
+    '[contenteditable="true"], [data-qa="vacancy-response-popup-form-letter-input"]');
+  // Кнопка может быть любым элементом: hh рисует её и ссылкой, и span, и div.
+  const letterToggle = [...document.querySelectorAll("*")]
+    .find(el => el.children.length === 0 && /сопроводительн/i.test(el.textContent || ""));
+  out.hasLetter = !!(letterField || letterToggle);
+
+  // Снимок того, из чего форма состоит. Нужен, чтобы причина отказа читалась
+  // по журналу, а не выяснялась отдельным заходом на живую вакансию: нажатие
+  // «Откликнуться» на части вакансий отправляет отклик сразу.
+  out.letterProbe = {
+    textareas: [...document.querySelectorAll("textarea")]
+      .map(t => t.getAttribute("data-qa") || t.getAttribute("name") || "без имени").slice(0, 6),
+    editable: document.querySelectorAll('[contenteditable="true"]').length,
+    sawWord: !!letterToggle,
+    qa: [...new Set([...document.querySelectorAll("[data-qa]")]
+      .map(e => e.getAttribute("data-qa"))
+      .filter(v => /letter|popup|submit/i.test(v)))].slice(0, 12),
+  };
 
   // Кандидаты в контейнеры вопросов
   const blocks = [...document.querySelectorAll(
     '[data-qa*="task"], [data-qa*="question"], fieldset, [class*="question"], [class*="task"]'
   )];
 
+  // Виджет самого hh: список готовых вопросов, которые кандидат может задать
+  // работодателю. Это предложение, а не требование, и ответа оно не ждёт.
+  // Без этого отсева он блокировал отклик как «вопрос без известного ответа».
+  const OWN_WIDGET = /задайте вопрос работодателю|задать вопрос работодателю/i;
+  // Надёжнее текста: у виджета hh свой data-qa, проверено на живой вакансии.
+  const ownQa = (el) => /vacancy-response-question/i.test(el.getAttribute("data-qa") || "");
+
   const seen = new Set();
   for (const b of blocks) {
     const text = clean(b.innerText);
     if (!text || text.length < 8 || seen.has(text)) continue;
+    if (OWN_WIDGET.test(text) || ownQa(b) || b.closest("[data-qa*='vacancy-response-question']")) continue;
 
     const radios = [...b.querySelectorAll('input[type="radio"]')];
     const checks = [...b.querySelectorAll('input[type="checkbox"]')];
@@ -171,6 +200,7 @@ def peek(vacancy_id: str, headless: bool = True) -> dict:
             data = page.evaluate(EXTRACT)
             result["questions"] = data.get("questions") or []
             result["has_letter"] = bool(data.get("hasLetter"))
+            result["letter_probe"] = data.get("letterProbe") or {}
             result["resumes"] = data.get("resumes") or []
             result["url"] = page.url
             # hh сам говорит в адресе, начиналась ли форма с вопросов

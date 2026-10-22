@@ -80,13 +80,43 @@ def decide(find: dict, form: dict | None, now: datetime | None = None) -> dict:
     return {"ok": True, "reason": "", "answers": ready}
 
 
+def _open_letter_field(page):
+    """Раскрыть поле письма, если hh прячет его за кнопкой.
+
+    На части вакансий сопроводительное появляется только после нажатия
+    «Добавить сопроводительное письмо». Разведка формы считает такую кнопку
+    наличием поля, поэтому заполнитель обязан её нажать.
+    """
+    for selector in LETTER_SELECTORS:
+        if page.query_selector(selector):
+            return
+    page.evaluate(
+        """() => {
+            const hit = [...document.querySelectorAll('button, a, span[role="button"]')]
+                .find(el => /сопроводительн/i.test(el.innerText || ""));
+            if (hit) hit.click();
+        }"""
+    )
+    page.wait_for_timeout(900)
+
+
 def _fill_form(page, letter: str, resume: str, answers: list[dict]) -> None:
-    """Заполнить форму отклика: резюме, письмо, ответы на вопросы."""
+    """Заполнить форму отклика: резюме, письмо, ответы на вопросы.
+
+    Письмо обязательно. Правило Ивана: отклик всегда уходит с сопроводительным,
+    поэтому ненайденное поле обрывает отправку. Молчаливый пропуск означал бы
+    голый отклик от его имени - хуже, чем неотправленный.
+    """
+    _open_letter_field(page)
+    placed = False
     for selector in LETTER_SELECTORS:
         field = page.query_selector(selector)
         if field:
             field.fill(letter)
+            placed = True
             break
+    if not placed:
+        raise CollectError("Поле сопроводительного письма не найдено: отклик без письма не отправляю")
 
     if resume:
         # Резюме выбирается радиокнопкой с подписью. Точного data-qa у hh нет,

@@ -274,6 +274,43 @@ class AutoRoundTests(unittest.TestCase):
         self.assertEqual(result["results"][-1]["reason"], "вход не удался")
 
 
+class LetterIsMandatoryTests(unittest.TestCase):
+    """Отклик без сопроводительного не уходит ни при каких обстоятельствах."""
+
+    class FakePage:
+        def __init__(self, has_field):
+            self.has_field = has_field
+            self.filled = None
+
+        def query_selector(self, selector):
+            if not self.has_field:
+                return None
+            page = self
+
+            class Field:
+                def fill(self, text):
+                    page.filled = text
+            return Field()
+
+        def evaluate(self, *args):
+            return None
+
+        def wait_for_timeout(self, ms):
+            return None
+
+    def test_missing_letter_field_stops_the_application(self):
+        from scout.collector import CollectError
+        page = self.FakePage(has_field=False)
+        with self.assertRaises(CollectError) as caught:
+            apply._fill_form(page, letter_for(), "Специалист сопровождения систем", [])
+        self.assertIn("без письма", str(caught.exception))
+
+    def test_letter_is_placed_when_the_field_exists(self):
+        page = self.FakePage(has_field=True)
+        apply._fill_form(page, letter_for(), "Специалист сопровождения систем", [])
+        self.assertIn("Откликаюсь на позицию", page.filled)
+
+
 class LoginRelayTests(unittest.TestCase):
     def setUp(self):
         hh_login.clear()

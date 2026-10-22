@@ -53,5 +53,25 @@ class QuestionPlanTests(unittest.TestCase):
         self.assertEqual(pending_questions([find], [], now=now), [])
 
 
+class HhOwnWidgetTests(unittest.TestCase):
+    """Собственный виджет hh не должен блокировать отклик."""
+
+    def test_ask_employer_widget_is_not_a_question(self):
+        # «Задайте вопрос работодателю» - предложение hh кандидату, а не
+        # требование работодателя. 23.10 оно блокировало обоих кандидатов,
+        # которых разведчик рекомендовал.
+        form = {"questions": [
+            {"question": "Задайте вопрос работодателю", "kind": "checkbox",
+             "options": ["Где располагается место работы?", "Какой график работы?"]},
+        ]}
+        self.assertEqual(plan_answers({"resume": "Специалист сопровождения систем"}, form), [])
+
+    def test_real_question_still_counts(self):
+        form = {"questions": [{"question": "Почему вы хотите к нам?", "kind": "text"}]}
+        planned = plan_answers({"resume": "Специалист сопровождения систем"}, form)
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0]["status"], "needs_user")
+
+
 if __name__ == "__main__":
     unittest.main()

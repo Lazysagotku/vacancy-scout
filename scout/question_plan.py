@@ -28,6 +28,10 @@ def plan_answers(find: dict, form: dict) -> list[dict]:
         if not isinstance(item, dict):
             continue
         question = str(item.get("question") or "").strip()[:400]
+        # Второй рубеж против собственного виджета hh: карточки, разведанные
+        # до 23.10, лежат в базе с этим «вопросом» внутри.
+        if "вопрос работодателю" in question.casefold():
+            continue
         kind = str(item.get("kind") or "").lower()
         lowered = question.casefold()
         suggestion = ""
