@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+from scout import telegram_worker
 from scout.telegram_worker import allowed_command, handle_update, start_if_configured
 
 
@@ -22,7 +23,11 @@ class TelegramWorkerTests(unittest.TestCase):
         self.assertIsNone(allowed_command(update(chat_id=99), 42, now=NOW))
         self.assertIsNone(allowed_command(update(sender_id=99), 42, now=NOW))
         self.assertIsNone(allowed_command(update(chat_type="group"), 42, now=NOW))
-        self.assertIsNone(allowed_command(update(age=300), 42, now=NOW))
+        # Пять минут - своя команда, окно шире её намеренно: прежние 120 секунд
+        # теряли команду человека при каждом перезапуске сервиса.
+        self.assertEqual(allowed_command(update(age=300), 42, now=NOW), "/status")
+        self.assertIsNone(
+            allowed_command(update(age=telegram_worker.FRESH_SECONDS + 60), 42, now=NOW))
         self.assertIsNone(allowed_command(update(text="123456"), 42, now=NOW))
 
     def test_status_is_sent_only_to_bound_chat(self):
@@ -86,6 +91,21 @@ class TelegramWorkerTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("Зарплатные ожидания?", sent[0])
         self.assertIn("черновик", sent[0].lower())
+
+
+class FreshnessWindowTests(unittest.TestCase):
+    """Окно свежести: своё пропускаем, просроченное нет."""
+
+    def test_command_within_the_window_passes(self):
+        # 23.10 на прежних 120 секундах терялись /login и /status: сервис
+        # перезапускался, и команда человека молча пропадала.
+        got = telegram_worker.allowed_command(update(age=300), 42, now=NOW)
+        self.assertEqual(got, "/status")
+
+    def test_command_past_the_window_is_refused(self):
+        got = telegram_worker.allowed_command(
+            update(age=telegram_worker.FRESH_SECONDS + 60), 42, now=NOW)
+        self.assertIsNone(got)
 
 
 if __name__ == "__main__":

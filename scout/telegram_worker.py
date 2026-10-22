@@ -16,6 +16,13 @@ _stop = threading.Event()
 _start_lock = threading.Lock()
 COMMANDS = {"/start", "/status", "/preview", "/prepare", "/questions", "/login", "/apply"}
 
+# Сколько секунд команда считается свежей. Окно защищает от повтора старой
+# команды, когда Telegram отдаёт накопленную очередь. Прежние 120 секунд были
+# слишком узкими: после перезапуска сервиса команда человека терялась молча,
+# и 23.10 на этом потерялись /login и /status. Накопленная очередь теперь
+# отбрасывается при старте опроса, поэтому окно можно держать шире.
+FRESH_SECONDS = 600
+
 
 def allowed_command(update: dict, allowed_chat_id: int,
                     now: datetime | None = None) -> str | None:
@@ -34,7 +41,7 @@ def allowed_command(update: dict, allowed_chat_id: int,
             or chat.get("type") != "private" or chat.get("id") != allowed_chat_id
             or sender.get("id") != allowed_chat_id or sender.get("is_bot") is not False
             or not isinstance(stamp, int) or not isinstance(text, str)
-            or len(text) > 64 or not 0 <= now.timestamp() - stamp <= 120):
+            or len(text) > 64 or not 0 <= now.timestamp() - stamp <= FRESH_SECONDS):
         return None
     if text in COMMANDS:
         return text
@@ -115,6 +122,20 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
 
     offset: int | None = None
     misses = 0
+
+    # Накопленная очередь отбрасывается до первой обработки: команды, посланные
+    # пока сервис лежал, выполнять нельзя - человек уже не ждёт их результата.
+    try:
+        backlog = bot.get_updates(offset=None, timeout=0)
+        for update in backlog:
+            update_id = update.get("update_id") if isinstance(update, dict) else None
+            if isinstance(update_id, int):
+                offset = max(offset or 0, update_id + 1)
+        if backlog:
+            log.info("telegram: отброшено накопленных сообщений: %s", len(backlog))
+    except TelegramError:
+        pass                      # нет связи - начнём с нуля на первом круге
+
     while not _stop.is_set():
         try:
             updates = bot.get_updates(offset=offset, timeout=10)
