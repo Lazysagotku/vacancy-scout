@@ -34,6 +34,8 @@ class State:
     last_rechecked: int = 0        # сколько карточек перепроверил на живость
     last_archived: int = 0         # сколько из них оказались в архиве
     last_closed: int = 0           # сколько закрыл по возрасту
+    last_applied: int = 0          # сколько откликов ушло в последнем круге
+    last_apply_ready: int = 0      # сколько было готово к отправке
     last_error: str | None = None
     last_note: str | None = None   # не ошибка, но человеку знать надо: сессия hh, пропущенная строка
     authorized: bool | None = None # жива ли сессия hh у браузера скаута
@@ -217,6 +219,8 @@ def _loop() -> None:
                 return
         scan_once()
         _recheck_after_scan()
+        _letters_after_scan()
+        _apply_after_scan()
         minutes = int(store.get_setting("interval_minutes", "180"))
         # Ждём с прерыванием: остановка не должна ждать конца интервала
         if _wake.wait(timeout=minutes * 60):
@@ -265,6 +269,65 @@ def _recheck_after_scan() -> None:
             _state.last_closed = closed["closed"]
     except Exception:
         log.exception("Закрытие хвоста по возрасту прервано")
+
+
+def _letters_after_scan() -> None:
+    """Догнать письма и мнения по свежим карточкам.
+
+    Без письма и мнения карточка не проходит ворота отправки, поэтому круг
+    откликов без этого шага всегда находит ноль готовых.
+    """
+    with _lock:
+        if not _state.running:
+            return
+    limit = int(store.get_setting("letter_limit", "10"))
+    if limit <= 0:
+        return
+    try:
+        from scout.analysis import catch_up_letters
+        written = catch_up_letters(limit)
+        with _lock:
+            _state.last_prepared = written
+        if written:
+            log.info("написано писем: %s", written)
+    except Exception:
+        log.exception("Подготовка писем прервана")
+
+
+def _apply_after_scan() -> None:
+    """Автоматический круг откликов.
+
+    Живая отправка включается настройкой `live_apply`; без неё круг идёт
+    вхолостую и только пишет в журнал, что ушло бы. Ошибка здесь не должна
+    останавливать сбор.
+    """
+    with _lock:
+        if not _state.running or _state.busy or _state.preparing:
+            return
+    if store.get_setting("auto_apply", "0") != "1":
+        return
+    try:
+        from scout import apply, telegram_worker
+        send_photo, send_message = telegram_worker.channel()
+        with _lock:
+            _state.busy = True
+            _state.stage = "отклики"
+        try:
+            result = apply.auto_round(send_photo, send_message,
+                                      dry_run=not apply.live_allowed())
+        finally:
+            with _lock:
+                _state.busy = False
+                _state.stage = ""
+        with _lock:
+            _state.last_applied = result.get("sent", 0)
+            _state.last_apply_ready = result.get("ready", 0)
+        log.info("круг откликов: %s", {k: v for k, v in result.items() if k != "results"})
+        if result.get("sent") and send_message:
+            send_message(f"Отправлено откликов: {result['sent']}. "
+                         f"Осталось на сегодня: {result.get('left_today')}.")
+    except Exception:
+        log.exception("Круг откликов прерван")
 
 
 def start() -> dict:

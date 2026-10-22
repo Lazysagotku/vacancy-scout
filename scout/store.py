@@ -294,6 +294,20 @@ def log_application(vacancy_id: str, mode: str, outcome: str, **fields) -> dict:
     return row
 
 
+def sent_today(now: datetime | None = None) -> int:
+    """Сколько откликов реально ушло за сегодня.
+
+    Нужен автоматическому кругу: hh считает частоту откликов, и пачка в двести
+    штук за час выглядит как робот даже при честном содержании.
+    """
+    day = (now or datetime.now()).date().isoformat()
+    with connect() as con:
+        row = con.execute(
+            "SELECT COUNT(*) FROM applications WHERE outcome = 'sent' AND sent_at LIKE ?",
+            (day + "%",)).fetchone()
+    return int(row[0] if row else 0)
+
+
 def applications(limit: int = 100) -> list[dict]:
     with connect() as con:
         rows = con.execute(

@@ -230,6 +230,90 @@ def apply_one(vacancy_id: str, dry_run: bool = True, headless: bool = True) -> d
                 pass
 
 
+# Сколько откликов в сутки отправляет автоматический круг. hh смотрит на
+# частоту: двести штук за час выглядят роботом даже при честном содержании.
+# Живой человек в активном поиске делает десятки, поэтому держим тот же темп.
+DAILY_LIMIT = 25
+
+# Пауза между откликами внутри круга, секунды. Разброс намеренный.
+PACE = (20, 55)
+
+
+def ready_now(limit: int = DAILY_LIMIT) -> list[dict]:
+    """Карточки, готовые к отправке прямо сейчас, в порядке убывания балла."""
+    from scout import response_form
+    from scout.application_plan import preview
+
+    forms = response_form.all_forms()
+    plan = preview(store.list_finds(), forms, limit=max(limit * 3, 30))
+    ready = [item for item in plan if item["eligible"]]
+    by_score = {str(f.get("id")): (f.get("score") or 0) for f in store.list_finds()}
+    ready.sort(key=lambda item: -by_score.get(str(item["id"]), 0))
+    return ready[:max(0, limit)]
+
+
+def auto_round(send_photo=None, send_message=None, dry_run: bool = True) -> dict:
+    """Один автоматический круг откликов.
+
+    Порядок намеренный: сначала проверяем остаток суточного лимита, потом
+    собираем готовых, и только потом трогаем сеть. Слетевшая сессия hh не
+    отменяет круг - модуль просит человека войти через Telegram и продолжает
+    с той же карточки.
+    """
+    import random
+    import time
+
+    from scout import hh_login
+
+    live = live_allowed() and not dry_run
+    left = DAILY_LIMIT - store.sent_today()
+    if live and left <= 0:
+        return {"mode": "live", "skipped": "суточный лимит исчерпан",
+                "sent": 0, "ready": 0}
+
+    ready = ready_now(left if live else DAILY_LIMIT)
+    results: list[dict] = []
+    sent = 0
+    relogged = False
+    position = 0
+    while position < len(ready):
+        item = ready[position]
+        try:
+            outcome = apply_one(item["id"], dry_run=not live)
+        except CollectError as problem:
+            # Сессия слетела посреди круга. Один раз зовём человека в бот и
+            # повторяем ТУ ЖЕ карточку, не сдвигая позицию: иначе вакансия,
+            # на которой сорвались, молча выпадает из круга.
+            if relogged or "сесси" not in str(problem).lower() or send_photo is None:
+                results.append({"id": item["id"], "sent": False,
+                                "reason": type(problem).__name__})
+                break
+            relogged = True
+            if send_message:
+                send_message("Сессия hh слетела посреди откликов. Пришли ответ "
+                             "для входа: цифры - код, другой текст - разгадка картинки.")
+            done = hh_login.login(send_photo, send_message)
+            if not done.get("ok"):
+                results.append({"id": item["id"], "sent": False, "reason": "вход не удался"})
+                break
+            continue
+        except VpnCheck:
+            results.append({"id": item["id"], "sent": False, "reason": "проверка VPN"})
+            break
+        except Exception as problem:
+            results.append({"id": item["id"], "sent": False,
+                            "reason": type(problem).__name__})
+            break
+        results.append({"id": item["id"], **outcome})
+        position += 1
+        if outcome.get("sent"):
+            sent += 1
+            time.sleep(random.uniform(*PACE))
+    return {"mode": "live" if live else "dry-run", "ready": len(ready),
+            "sent": sent, "left_today": DAILY_LIMIT - store.sent_today(),
+            "results": results}
+
+
 def apply_batch(limit: int = 5, dry_run: bool = True) -> dict:
     """Пачка откликов по очереди готовности. Лимит намеренно маленький."""
     from scout import response_form

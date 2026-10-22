@@ -12,6 +12,12 @@ from scout.writer import _looks_like_letter
 
 MAX_SEND_AGE = timedelta(hours=72)
 
+# Порог отправки. Решение Ивана 23.10: откликаться на всё, что разведчик
+# рекомендует и что набрало больше 60. Прежние 70 с требованием вердикта
+# «сильный матч» отсекали целый слой подходящих вакансий, по которым мнение
+# модели было положительным.
+MIN_SEND_SCORE = 60
+
 
 def _recent(value: str | None, now: datetime) -> bool:
     try:
@@ -36,8 +42,8 @@ def evaluate(find: dict, form: dict | None = None, now: datetime | None = None) 
         reasons.append("Разбор вакансии устарел")
     if find.get("archived_at"):
         reasons.append("Вакансия в архиве")
-    if (find.get("score") or 0) < 70 or find.get("verdict") != "сильный матч":
-        reasons.append("Совпадение недостаточно сильное")
+    if (find.get("score") or 0) <= MIN_SEND_SCORE:
+        reasons.append(f"Совпадение ниже порога {MIN_SEND_SCORE}")
     if (find.get("opinion") or "") != "Рекомендую" or find.get("blockers"):
         reasons.append("Положительное мнение без блокеров отсутствует")
     # Резюме - источник правды для зарплаты и проверки стажа. Трек политики

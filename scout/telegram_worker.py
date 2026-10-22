@@ -147,6 +147,28 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
             _stop.wait(15)
 
 
+def channel() -> tuple:
+    """Пара функций отправки в личный чат, или (None, None) без настройки.
+
+    Нужна фоновому кругу откликов: когда сессия hh слетает посреди пачки,
+    человека надо позвать туда же, где он отвечает на вход. Токен и chat id
+    остаются внутри модуля, наружу уходят только замыкания.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    raw_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not raw_chat_id:
+        return (None, None)
+    try:
+        chat_id = int(raw_chat_id)
+        if chat_id <= 0:
+            return (None, None)
+        bot = TelegramClient(token)
+    except ValueError:
+        return (None, None)
+    return (lambda png, caption="": bot.send_photo(chat_id, png, caption),
+            lambda text: bot.send_message(chat_id, text))
+
+
 def start_if_configured() -> bool:
     """Запустить polling только после явной привязки chat id в .env."""
     global _worker_thread

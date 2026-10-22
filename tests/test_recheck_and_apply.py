@@ -6,7 +6,10 @@ from unittest.mock import patch
 
 from scout import apply, hh_login, profile, recheck
 
-NOW = datetime(2026, 10, 13, 12, 0)
+# Точка отсчёта берётся от текущего момента намеренно. Зашитая дата делала
+# тесты свежести одноразовыми: ворота отправки пускают карточку моложе 72
+# часов, и набор, зелёный 14 октября, падал 23-го без единой правки кода.
+NOW = datetime.now()
 SALARY = "Ожидания по доходу - 200 000 рублей на руки."
 
 
@@ -217,6 +220,58 @@ class ApplyGuardTests(unittest.TestCase):
             result = apply.apply_one("555", dry_run=False)
         self.assertFalse(result["sent"])
         self.assertEqual(result["mode"], "dry-run")
+
+
+class AutoRoundTests(unittest.TestCase):
+    """Автоматический круг откликов: порог, суточный лимит, слетевшая сессия."""
+
+    def test_score_just_over_threshold_passes(self):
+        from scout.application_plan import evaluate
+        form = {"checked_at": NOW.isoformat(), "questions": [], "has_letter": True,
+                "has_questions_flag": False, "note": ""}
+        # 61 проходит, 60 нет: решение Ивана «больше 60».
+        self.assertTrue(evaluate(find(score=61), form, now=NOW)["eligible"])
+        blocked = evaluate(find(score=60), form, now=NOW)
+        self.assertFalse(blocked["eligible"])
+        self.assertIn("ниже порога", " ".join(blocked["reasons"]))
+
+    def test_strong_verdict_is_no_longer_required(self):
+        # Раньше ворота требовали вердикт «сильный матч», и карточка с баллом
+        # 65 не проходила никогда, даже с положительным мнением модели.
+        from scout.application_plan import evaluate
+        form = {"checked_at": NOW.isoformat(), "questions": [], "has_letter": True,
+                "has_questions_flag": False, "note": ""}
+        card = find(score=65, verdict="стоит посмотреть")
+        self.assertTrue(evaluate(card, form, now=NOW)["eligible"])
+
+    def test_daily_limit_stops_the_round(self):
+        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.store.sent_today", return_value=apply.DAILY_LIMIT),              patch("scout.apply.apply_one") as send:
+            result = apply.auto_round(dry_run=False)
+        self.assertIn("лимит", result["skipped"])
+        send.assert_not_called()
+
+    def test_lost_session_calls_the_human_once_and_continues(self):
+        from scout.collector import CollectError
+        calls = {"n": 0}
+
+        def flaky(vacancy_id, dry_run=True):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise CollectError("Нет сессии hh - нужен вход")
+            return {"sent": True, "mode": "live"}
+
+        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.store.sent_today", return_value=0),              patch("scout.apply.ready_now", return_value=[{"id": "1"}]),              patch("scout.apply.apply_one", side_effect=flaky),              patch("scout.hh_login.login", return_value={"ok": True}) as login,              patch("time.sleep"):
+            result = apply.auto_round(lambda *a, **k: None, lambda *a: None, dry_run=False)
+        login.assert_called_once()
+        self.assertEqual(result["sent"], 1)
+
+    def test_failed_login_stops_the_round(self):
+        from scout.collector import CollectError
+        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.store.sent_today", return_value=0),              patch("scout.apply.ready_now", return_value=[{"id": "1"}, {"id": "2"}]),              patch("scout.apply.apply_one",
+                   side_effect=CollectError("Нет сессии hh - нужен вход")),              patch("scout.hh_login.login", return_value={"ok": False}):
+            result = apply.auto_round(lambda *a, **k: None, lambda *a: None, dry_run=False)
+        self.assertEqual(result["sent"], 0)
+        self.assertEqual(result["results"][-1]["reason"], "вход не удался")
 
 
 class LoginRelayTests(unittest.TestCase):

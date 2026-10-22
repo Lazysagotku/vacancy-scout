@@ -199,8 +199,14 @@ def compose(vacancy: Vacancy, verdict: Verdict, resume: str, form: dict | None =
         log.warning("writer: %s - не запустился: %s", vacancy.id, e)
         return None
     if run.returncode != 0:
-        # Вывод CLI может содержать фрагменты вакансии и личных данных.
-        log.warning("writer: %s - rc=%s", vacancy.id, run.returncode)
+        # Полный вывод CLI может содержать фрагменты вакансии, поэтому в лог
+        # идёт только первая строка. Она несёт причину отказа («Failed to
+        # authenticate», «rate limit») и не содержит данных вакансии. Голый
+        # rc=1 десять дней выглядел как «письма просто не пишутся», и причина
+        # - истёкший вход - нашлась только ручным воспроизведением.
+        head = (run.stdout or run.stderr or "").strip().splitlines()
+        log.warning("writer: %s - rc=%s: %s", vacancy.id, run.returncode,
+                    head[0][:200] if head else "вывода нет")
         return None
 
     letter, review = _split(run.stdout)
