@@ -180,6 +180,20 @@ def applications_ready(limit: int = Query(default=25, ge=1, le=100)):
             "live_apply": apply.live_allowed(), "items": out}
 
 
+@app.get("/api/learning/report", tags=["обратная связь"])
+def learning_report():
+    """Что сработало: доли ответов по баллу, мнению, треку, резюме, письму."""
+    from scout import learning
+    return {"report": learning.report(), "advice": learning.advice()}
+
+
+@app.post("/api/learning/collect", tags=["обратная связь"])
+def learning_collect(pages: int = Query(default=5, ge=1, le=20)):
+    """Прочитать со страницы откликов hh, чем ответили на отправленное."""
+    from scout import learning
+    return learning.collect(limit_pages=pages)
+
+
 @app.post("/api/finds/close-stale", tags=["находки"])
 def close_stale_finds(apply_changes: bool = Query(default=False, alias="apply")):
     """Закрывает хвост базы по возрасту. Без ?apply=true только показывает, сколько."""

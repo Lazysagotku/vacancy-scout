@@ -18,6 +18,12 @@ MAX_SEND_AGE = timedelta(hours=72)
 # модели было положительным.
 MIN_SEND_SCORE = 60
 
+# Какие мнения модели допускают отправку. Решение Ивана 23.10: добавить
+# «Под вопросом +» - это карточки с одним заметным пробелом, остальное
+# совпадает. На 25 разобранных вакансиях чистых «Рекомендую» оказалось две,
+# то есть при одном мнении суточный лимит не выбирается никогда.
+SENDABLE_OPINIONS = ("Рекомендую", "Под вопросом +")
+
 
 def _recent(value: str | None, now: datetime) -> bool:
     try:
@@ -44,7 +50,7 @@ def evaluate(find: dict, form: dict | None = None, now: datetime | None = None) 
         reasons.append("Вакансия в архиве")
     if (find.get("score") or 0) <= MIN_SEND_SCORE:
         reasons.append(f"Совпадение ниже порога {MIN_SEND_SCORE}")
-    if (find.get("opinion") or "") != "Рекомендую" or find.get("blockers"):
+    if (find.get("opinion") or "") not in SENDABLE_OPINIONS or find.get("blockers"):
         reasons.append("Положительное мнение без блокеров отсутствует")
     # Резюме - источник правды для зарплаты и проверки стажа. Трек политики
     # отвечает за доли выдачи и совпадает с резюме не всегда: на 4000 находок

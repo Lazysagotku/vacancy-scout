@@ -221,6 +221,7 @@ def _loop() -> None:
         _recheck_after_scan()
         _letters_after_scan()
         _apply_after_scan()
+        _learn_after_apply()
         minutes = int(store.get_setting("interval_minutes", "180"))
         # Ждём с прерыванием: остановка не должна ждать конца интервала
         if _wake.wait(timeout=minutes * 60):
@@ -328,6 +329,26 @@ def _apply_after_scan() -> None:
                          f"Осталось на сегодня: {result.get('left_today')}.")
     except Exception:
         log.exception("Круг откликов прерван")
+
+
+def _learn_after_apply() -> None:
+    """Прочитать исходы отправленных откликов и записать их в журнал.
+
+    Отклик живёт неделями: приглашение приходит через день, отказ через две.
+    Поэтому исходы читаются каждый круг, а не один раз после отправки.
+    """
+    with _lock:
+        if not _state.running or _state.busy:
+            return
+    if not store.sent_applications():
+        return
+    try:
+        from scout import learning
+        counts = learning.collect()
+        if counts.get("updated"):
+            log.info("исходы откликов: %s", counts)
+    except Exception:
+        log.exception("Чтение исходов откликов прервано")
 
 
 def start() -> dict:
