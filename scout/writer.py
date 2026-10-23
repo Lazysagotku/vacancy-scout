@@ -140,6 +140,24 @@ def _conditions(vacancy: Vacancy, extra: dict) -> str:
     return "; ".join(parts) or "не указаны"
 
 
+# Переменные шлюза, которые сервис наследует от консоли, где его запустили.
+GATEWAY_VARS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+
+
+def _own_credentials() -> dict:
+    """Окружение для CLI без переменных стороннего шлюза.
+
+    Письма зависели от того, из какой консоли запущен сервис: он наследовал
+    адрес и токен шлюза, а шлюз отвечал «Only Web models are allowed, the model
+    ID must begin with gpt-» на запрос opus. Из другой консоли тот же вызов
+    проходил. Такую зависимость диагностировать невозможно, поэтому CLI всегда
+    работает на собственной учётной записи.
+    """
+    import os
+
+    return {key: value for key, value in os.environ.items() if key not in GATEWAY_VARS}
+
+
 def compose(vacancy: Vacancy, verdict: Verdict, resume: str, form: dict | None = None,
             extra: dict | None = None) -> tuple[str, str] | None:
     """Пишет письмо и мнение. None - если Claude недоступен или ответил мусором.
@@ -184,7 +202,7 @@ def compose(vacancy: Vacancy, verdict: Verdict, resume: str, form: dict | None =
     ]
     try:
         run = subprocess.run(
-            cmd, input=prompt,
+            cmd, input=prompt, env=_own_credentials(),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=TIMEOUT, cwd=str(Path(__file__).resolve().parent.parent),
             # Сервис живёт в pythonw без консоли, и без этого флага Windows
