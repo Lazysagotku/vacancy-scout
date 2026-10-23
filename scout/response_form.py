@@ -187,6 +187,15 @@ def peek(vacancy_id: str, headless: bool = True) -> dict:
 
             if any(m in page.url for m in ("/account/login", "/account/signup")):
                 raise CollectError("hh показал форму регистрации вместо отклика: нужен вход.")
+
+            # Адрес при этом не меняется: hh рисует регистрацию прямо внутри
+            # окна отклика. Без этой проверки разведка записывала «поля письма
+            # нет» вместо «нет сессии», и карточка навсегда оставалась
+            # заблокированной по ложной причине. Найдено 23.10 по снимку
+            # разметки: единственным управляющим элементом окна был
+            # account-signup-submit.
+            if page.query_selector('[data-qa*="account-signup"], [data-qa*="account-login"]'):
+                raise CollectError("hh показал регистрацию внутри формы отклика: нужен вход.")
             if hit_vpn_check(page):
                 raise VpnCheck("hh показывает проверку VPN на форме отклика")
 

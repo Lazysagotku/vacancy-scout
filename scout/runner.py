@@ -220,6 +220,7 @@ def _loop() -> None:
         scan_once()
         _recheck_after_scan()
         _letters_after_scan()
+        _ensure_session()
         _forms_after_letters()
         _apply_after_scan()
         _learn_after_apply()
@@ -294,6 +295,32 @@ def _letters_after_scan() -> None:
             log.info("написано писем: %s", written)
     except Exception:
         log.exception("Подготовка писем прервана")
+
+
+def _ensure_session() -> None:
+    """Проверить сессию hh и позвать человека, если она слетела.
+
+    Сессия живёт несколько часов и умирает молча. Раньше это замечалось только
+    по пустым результатам: 23.10 сессия слетела между прогонами, и разведка
+    форм три цикла подряд записывала мусор вместо отказа.
+    """
+    with _lock:
+        if not _state.running or _state.busy:
+            return
+    if store.get_setting("auto_apply", "0") != "1":
+        return
+    try:
+        from scout import collector, hh_login, telegram_worker
+        if collector.is_authorized():
+            return
+        send_photo, send_message = telegram_worker.channel()
+        if send_photo is None:
+            log.warning("сессия hh слетела, Telegram не настроен - вход невозможен")
+            return
+        log.info("сессия hh слетела, зову человека в Telegram")
+        hh_login.login(send_photo, send_message)
+    except Exception:
+        log.exception("Проверка сессии hh прервана")
 
 
 def _forms_after_letters() -> None:
