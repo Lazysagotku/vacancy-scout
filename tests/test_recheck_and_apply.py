@@ -354,6 +354,31 @@ class LoginAdvanceTests(unittest.TestCase):
         self.assertEqual(pressed, "")
 
 
+class SignedInTests(unittest.TestCase):
+    """Успех входа определяется страницей, а не адресом."""
+
+    class Page:
+        def __init__(self, result):
+            self.result = result
+
+        def evaluate(self, script):
+            return self.result
+
+    def test_login_form_means_not_signed_in(self):
+        # Адрес после выбора роли содержит «/applicant», и прежняя проверка
+        # рапортовала об успехе, ни разу не спросив телефон.
+        self.assertFalse(hh_login.signed_in(self.Page(False)))
+
+    def test_applicant_sections_mean_signed_in(self):
+        self.assertTrue(hh_login.signed_in(self.Page(True)))
+
+    def test_broken_page_is_not_signed_in(self):
+        class Dead:
+            def evaluate(self, script):
+                raise RuntimeError("страница закрыта")
+        self.assertFalse(hh_login.signed_in(Dead()))
+
+
 class LoginRelayTests(unittest.TestCase):
     def setUp(self):
         hh_login.clear()

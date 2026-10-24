@@ -109,6 +109,28 @@ SKIP = r"регистр|создать аккаунт|работодател|с�
 MAX_ADVANCES = 4
 
 
+def signed_in(page) -> bool:
+    """Вошли ли на самом деле.
+
+    Судить по адресу нельзя: hh уводит на адрес с «/applicant» ещё на шаге
+    выбора роли, и сценарий рапортовал об успехе, ни разу не спросив телефон.
+    Смотрим на то же, что видит человек: формы входа нет, разделы соискателя
+    есть.
+    """
+    try:
+        return bool(page.evaluate(
+            """() => {
+                const text = document.body ? document.body.innerText : '';
+                const hasLoginForm = /Обязательное поле|Войти с паролем|Войти по коду/.test(text)
+                    || !!document.querySelector('[data-qa="login"], [data-qa="account-login-submit"]');
+                const hasApplicant = /Отклики|Резюме и профиль|Мои резюме|Избранное/.test(text);
+                return hasApplicant && !hasLoginForm;
+            }"""
+        ))
+    except Exception:
+        return False
+
+
 def _first_input(page):
     """Первое видимое незаполненное поле ввода или None."""
     return page.evaluate_handle(
@@ -168,8 +190,7 @@ def login(send_photo, send_message, headless: bool = True) -> dict:
                       timeout=45_000)
             page.wait_for_timeout(2500)
 
-            body = page.evaluate("() => document.body ? document.body.innerText : ''")
-            if "выход" in body.lower() or "/applicant" in page.url:
+            if signed_in(page):
                 return {"ok": True, "steps": ["Сессия уже жива"], "note": "Вход не требуется"}
 
             advances = 0
@@ -184,7 +205,7 @@ def login(send_photo, send_message, headless: bool = True) -> dict:
                     advances += 1
                     steps.append(f"кнопка «{pressed}»")
                     page.wait_for_timeout(4000)
-                    if "/applicant" in page.url or "/account/login" not in page.url:
+                    if signed_in(page):
                         send_message("Вход выполнен.")
                         return {"ok": True, "steps": steps}
 
@@ -222,7 +243,7 @@ def login(send_photo, send_message, headless: bool = True) -> dict:
                         steps.append(f"кнопка «{pressed}»")
                         page.wait_for_timeout(4000)
 
-                if "/applicant" in page.url or "/account/login" not in page.url:
+                if signed_in(page):
                     send_message("Вход выполнен.")
                     return {"ok": True, "steps": steps}
 
