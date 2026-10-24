@@ -194,8 +194,21 @@ def peek(vacancy_id: str, headless: bool = True) -> dict:
             # заблокированной по ложной причине. Найдено 23.10 по снимку
             # разметки: единственным управляющим элементом окна был
             # account-signup-submit.
-            if page.query_selector('[data-qa*="account-signup"], [data-qa*="account-login"]'):
-                raise CollectError("hh показал регистрацию внутри формы отклика: нужен вход.")
+            # Видимость обязательна. hh держит разметку формы входа в DOM и
+            # у вошедшего пользователя, поэтому поиск по селектору без
+            # проверки видимости останавливал разведку на первой же вакансии
+            # при живой сессии.
+            wall = page.evaluate(
+                """() => [...document.querySelectorAll(
+                        '[data-qa*="account-signup"], [data-qa*="account-login"]')]
+                    .filter(el => el.offsetParent !== null)
+                    .map(el => el.getAttribute('data-qa'))
+                    .slice(0, 5)"""
+            )
+            if wall:
+                raise CollectError(
+                    "hh показал регистрацию внутри формы отклика: нужен вход. "
+                    f"Видимые элементы: {', '.join(wall)}")
             if hit_vpn_check(page):
                 raise VpnCheck("hh показывает проверку VPN на форме отклика")
 

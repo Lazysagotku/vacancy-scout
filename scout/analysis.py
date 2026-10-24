@@ -214,12 +214,23 @@ def peek_forms(finds: list[dict], limit: int = 8, force: bool = False) -> int:
              if (f.get("score") or 0) >= 60
              and (force or not response_form.known(f["id"]))]
     done = 0
+    misses = 0
     for find in worth[:limit]:
         try:
             response_form.peek(find["id"])
             done += 1
-        except Exception:
-            break            # сессия отвалилась - дальше смысла нет
+            misses = 0
+        except Exception as problem:
+            # Отдельная вакансия может показать форму регистрации при живой
+            # сессии: так ведут себя вакансии, требующие подтверждения входа.
+            # Прежний голый break считал это потерей сессии и обрывал всю
+            # пачку на первой же такой вакансии, оставляя остальных без форм.
+            misses += 1
+            log.warning("форма %s не снялась (%s подряд): %s: %s", find["id"],
+                        misses, type(problem).__name__, str(problem)[:200])
+            if misses >= 3:
+                log.warning("три отказа подряд - похоже на потерю сессии, разведка прервана")
+                break
     return done
 
 
