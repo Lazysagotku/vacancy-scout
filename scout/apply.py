@@ -262,14 +262,26 @@ def apply_one(vacancy_id: str, dry_run: bool = True, headless: bool = True) -> d
 
 # Сколько откликов в сутки отправляет автоматический круг. hh смотрит на
 # частоту: двести штук за час выглядят роботом даже при честном содержании.
-# Живой человек в активном поиске делает десятки, поэтому держим тот же темп.
-DAILY_LIMIT = 50
+# Значение настраивается без правки кода: Иван меняет темп по ходу поиска.
+DEFAULT_DAILY_LIMIT = 50
+
+
+def daily_limit() -> int:
+    try:
+        return max(0, int(store.get_setting("daily_limit", str(DEFAULT_DAILY_LIMIT))))
+    except (TypeError, ValueError):
+        return DEFAULT_DAILY_LIMIT
+
+
+# Оставлено для совместимости со старыми вызовами и тестами.
+DAILY_LIMIT = DEFAULT_DAILY_LIMIT
 
 # Пауза между откликами внутри круга, секунды. Разброс намеренный.
 PACE = (20, 55)
 
 
-def ready_now(limit: int = DAILY_LIMIT) -> list[dict]:
+def ready_now(limit: int | None = None) -> list[dict]:
+    limit = daily_limit() if limit is None else limit
     """Карточки, готовые к отправке прямо сейчас, в порядке убывания балла."""
     from scout import response_form
     from scout.application_plan import preview
@@ -296,12 +308,13 @@ def auto_round(send_photo=None, send_message=None, dry_run: bool = True) -> dict
     from scout import hh_login
 
     live = live_allowed() and not dry_run
-    left = DAILY_LIMIT - store.sent_today()
+    cap = daily_limit()
+    left = cap - store.sent_today()
     if live and left <= 0:
         return {"mode": "live", "skipped": "суточный лимит исчерпан",
                 "sent": 0, "ready": 0}
 
-    ready = ready_now(left if live else DAILY_LIMIT)
+    ready = ready_now(left if live else cap)
     results: list[dict] = []
     sent = 0
     relogged = False
@@ -340,7 +353,7 @@ def auto_round(send_photo=None, send_message=None, dry_run: bool = True) -> dict
             sent += 1
             time.sleep(random.uniform(*PACE))
     return {"mode": "live" if live else "dry-run", "ready": len(ready),
-            "sent": sent, "left_today": DAILY_LIMIT - store.sent_today(),
+            "sent": sent, "left_today": cap - store.sent_today(),
             "results": results}
 
 

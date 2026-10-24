@@ -245,7 +245,8 @@ class AutoRoundTests(unittest.TestCase):
         self.assertTrue(evaluate(card, form, now=NOW)["eligible"])
 
     def test_daily_limit_stops_the_round(self):
-        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.store.sent_today", return_value=apply.DAILY_LIMIT),              patch("scout.apply.apply_one") as send:
+        # Лимит теперь настройка, а не константа: проверяем против него же.
+        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.daily_limit", return_value=25),              patch("scout.apply.store.sent_today", return_value=25),              patch("scout.apply.apply_one") as send:
             result = apply.auto_round(dry_run=False)
         self.assertIn("лимит", result["skipped"])
         send.assert_not_called()
