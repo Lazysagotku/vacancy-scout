@@ -30,9 +30,16 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent
 
 @app.on_event("startup")
 def on_startup() -> None:
+    import logging
+    # Без явной настройки записи сообщения уровня INFO не доходят до файла,
+    # и журнал сервиса выглядел пустым даже там, где код честно логировал.
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     store.init()
     runner.resume_if_enabled()
-    telegram_worker.start_if_configured()
+    started = telegram_worker.start_if_configured()
+    logging.getLogger(__name__).info(
+        "старт: telegram-бот %s", "подключён" if started else "не настроен")
 
 
 @app.on_event("shutdown")

@@ -144,6 +144,17 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
                 update_id = update.get("update_id") if isinstance(update, dict) else None
                 if isinstance(update_id, int):
                     offset = max(offset or 0, update_id + 1)
+                # Отклонённое сообщение исчезало без следа, и молчание бота
+                # нельзя было отличить от мёртвого потока опроса. Текст в лог
+                # не попадает: ответы на вход содержат коды подтверждения.
+                taken = allowed_command(update, chat_id)
+                if taken is None:
+                    log.info("telegram: сообщение отклонено (не команда, "
+                             "чужой чат или старше %s с)", FRESH_SECONDS)
+                elif taken.startswith("::answer::"):
+                    log.info("telegram: принят ответ для входа")
+                else:
+                    log.info("telegram: принята команда %s", taken)
                 handle_update(
                     update, chat_id, bot.send_message, runner.status,
                     lambda: application_preview(store.list_finds(), response_form.all_forms()),
