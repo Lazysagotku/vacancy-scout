@@ -119,6 +119,18 @@ class RefusalReasonTests(unittest.TestCase):
         reason = telegram_worker.refusal_reason(update(chat_type="group"), 42, now=NOW)
         self.assertIn("не личный", reason)
 
+    def test_clock_skew_is_tolerated(self):
+        # Отметку ставит сервер Telegram, сравнивают с часами этой машины.
+        # 24.10 команды отбрасывались при расхождении в одну секунду.
+        self.assertEqual(allowed_command(update(age=-1), 42, now=NOW), "/status")
+        self.assertEqual(
+            allowed_command(update(age=-telegram_worker.CLOCK_SKEW_SECONDS + 5), 42, now=NOW),
+            "/status")
+
+    def test_far_future_stamp_is_still_refused(self):
+        self.assertIsNone(
+            allowed_command(update(age=-telegram_worker.CLOCK_SKEW_SECONDS - 60), 42, now=NOW))
+
     def test_stale_message_names_the_age(self):
         reason = telegram_worker.refusal_reason(
             update(age=telegram_worker.FRESH_SECONDS + 5), 42, now=NOW)

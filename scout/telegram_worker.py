@@ -23,6 +23,13 @@ COMMANDS = {"/start", "/status", "/preview", "/prepare", "/questions", "/login",
 # отбрасывается при старте опроса, поэтому окно можно держать шире.
 FRESH_SECONDS = 600
 
+# Допуск на расхождение часов. Отметку времени ставит сервер Telegram, а
+# сравнивают её с часами этой машины, и они расходятся. 24.10 команды Ивана
+# отбрасывались как «из будущего» при расхождении в одну секунду: нижней
+# границей стоял ноль. Две минуты покрывают обычный дрейф и не открывают
+# повтор старой команды - верхняя граница по-прежнему своя.
+CLOCK_SKEW_SECONDS = 120
+
 
 def allowed_command(update: dict, allowed_chat_id: int,
                     now: datetime | None = None) -> str | None:
@@ -41,7 +48,8 @@ def allowed_command(update: dict, allowed_chat_id: int,
             or chat.get("type") != "private" or chat.get("id") != allowed_chat_id
             or sender.get("id") != allowed_chat_id or sender.get("is_bot") is not False
             or not isinstance(stamp, int) or not isinstance(text, str)
-            or len(text) > 64 or not 0 <= now.timestamp() - stamp <= FRESH_SECONDS):
+            or len(text) > 64
+            or not -CLOCK_SKEW_SECONDS <= now.timestamp() - stamp <= FRESH_SECONDS):
         return None
     if text in COMMANDS:
         return text
@@ -86,8 +94,9 @@ def refusal_reason(update: dict, allowed_chat_id: int,
     if not isinstance(stamp, int):
         return "нет отметки времени"
     age = now.timestamp() - stamp
-    if age < 0:
-        return f"отметка времени в будущем на {abs(age):.0f} с"
+    if age < -CLOCK_SKEW_SECONDS:
+        return (f"отметка времени в будущем на {abs(age):.0f} с "
+                f"при допуске {CLOCK_SKEW_SECONDS}")
     if age > FRESH_SECONDS:
         return f"старше окна: {age:.0f} с при пределе {FRESH_SECONDS}"
     from scout import hh_login
