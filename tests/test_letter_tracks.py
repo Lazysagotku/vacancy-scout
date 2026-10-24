@@ -59,5 +59,20 @@ class BatchIsolationTests(unittest.TestCase):
         self.assertEqual(analyzed, 1)
 
 
+class WriterCredentialsTests(unittest.TestCase):
+    """CLI писем не должен зависеть от консоли, из которой запущен сервис."""
+
+    def test_gateway_variables_are_stripped(self):
+        import os
+        from scout import writer
+        with patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://example.invalid",
+                                     "ANTHROPIC_AUTH_TOKEN": "x",
+                                     "PATH": os.environ.get("PATH", "")}, clear=False):
+            env = writer._own_credentials()
+        for name in writer.GATEWAY_VARS:
+            self.assertNotIn(name, env)
+        self.assertIn("PATH", env)
+
+
 if __name__ == "__main__":
     unittest.main()

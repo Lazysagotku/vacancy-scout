@@ -100,6 +100,75 @@ def clear() -> None:
         _pending = None
 
 
+# Кнопки, которые двигают вход дальше и ничего не спрашивают у человека.
+# «Зарегистрироваться» сюда не входит намеренно: аккаунт у Ивана уже есть.
+ADVANCE = r"^(войти|продолжить|далее|подтвердить|получить код|выслать код|войти с паролем)$"
+SKIP = r"регистр|создать аккаунт|работодател|сотрудник"
+
+# Сколько раз подряд сценарий может нажать кнопку сам, не спрашивая человека.
+MAX_ADVANCES = 4
+
+
+def signed_in(page) -> bool:
+    """Вошли ли на самом деле.
+
+    Судить по адресу нельзя: hh уводит на адрес с «/applicant» ещё на шаге
+    выбора роли, и сценарий рапортовал об успехе, ни разу не спросив телефон.
+    Смотрим на то же, что видит человек: формы входа нет, разделы соискателя
+    есть.
+    """
+    try:
+        return bool(page.evaluate(
+            """() => {
+                const text = document.body ? document.body.innerText : '';
+                const hasLoginForm = /Обязательное поле|Войти с паролем|Войти по коду/.test(text)
+                    || !!document.querySelector('[data-qa="login"], [data-qa="account-login-submit"]');
+                const hasApplicant = /Отклики|Резюме и профиль|Мои резюме|Избранное/.test(text);
+                return hasApplicant && !hasLoginForm;
+            }"""
+        ))
+    except Exception:
+        return False
+
+
+def _first_input(page):
+    """Первое видимое незаполненное поле ввода или None."""
+    return page.evaluate_handle(
+        """() => {
+            const fields = [...document.querySelectorAll(
+                'input:not([type=hidden]):not([type=checkbox]):not([type=radio])')]
+                .filter(i => !i.disabled && !i.readOnly && i.offsetParent !== null);
+            return fields.find(i => !i.value) || fields[0] || null;
+        }"""
+    ).as_element()
+
+
+def _advance(page, advance: str, skip: str) -> str:
+    """Нажать кнопку, которая двигает вход дальше. Возвращает её текст.
+
+    Нужна потому, что вход в hh начинается со страницы выбора роли: полей там
+    нет, есть кнопка «Войти». Сценарий, умеющий только вводить текст, на ней
+    останавливался и просил человека прислать то, чего на снимке нет.
+    """
+    return page.evaluate(
+        """([advance, skip]) => {
+            const ok = new RegExp(advance, 'i');
+            const no = new RegExp(skip, 'i');
+            const controls = [...document.querySelectorAll(
+                'button, [role=button], input[type=submit], a')]
+                .filter(el => el.offsetParent !== null && !el.disabled);
+            const hit = controls.find(el => {
+                const text = (el.innerText || el.value || '').trim();
+                return text && ok.test(text) && !no.test(text);
+            });
+            if (!hit) return '';
+            hit.click();
+            return (hit.innerText || hit.value || '').trim().slice(0, 40);
+        }""",
+        [advance, skip],
+    )
+
+
 def login(send_photo, send_message, headless: bool = True) -> dict:
     """Открыть вход в hh и довести его с помощью человека.
 
@@ -121,14 +190,29 @@ def login(send_photo, send_message, headless: bool = True) -> dict:
                       timeout=45_000)
             page.wait_for_timeout(2500)
 
-            body = page.evaluate("() => document.body ? document.body.innerText : ''")
-            if "выход" in body.lower() or "/applicant" in page.url:
+            if signed_in(page):
                 return {"ok": True, "steps": ["Сессия уже жива"], "note": "Вход не требуется"}
 
-            for stage in ("captcha", "code"):
+            advances = 0
+            for stage in ("start", "captcha", "code"):
+                # Шаги без полей сценарий проходит сам: выбор роли, кнопка
+                # «Войти», промежуточные подтверждения. Человека зовём только
+                # когда на странице действительно надо что-то ввести.
+                while advances < MAX_ADVANCES and _first_input(page) is None:
+                    pressed = _advance(page, ADVANCE, SKIP)
+                    if not pressed:
+                        break
+                    advances += 1
+                    steps.append(f"кнопка «{pressed}»")
+                    page.wait_for_timeout(4000)
+                    if signed_in(page):
+                        send_message("Вход выполнен.")
+                        return {"ok": True, "steps": steps}
+
                 send_photo(page.screenshot(full_page=False),
-                           "Вход в hh. Пришли ответ: цифры - это код, любой другой "
-                           "текст - разгадка картинки.")
+                           "Вход в hh. Посмотри снимок и пришли то, что на нём просят: "
+                           "телефон или почту, разгадку картинки или код подтверждения. "
+                           "Ответ вводится в первое пустое поле страницы.")
                 waiting = ask(stage)
                 answer = waiting.wait()
                 if answer is None:
@@ -136,26 +220,34 @@ def login(send_photo, send_message, headless: bool = True) -> dict:
                     return {"ok": False, "steps": steps, "note": "истекло ожидание"}
 
                 kind = classify(answer)
-                value = digits(answer) if kind == "code" else answer.strip()
                 steps.append(kind)
-
-                field_selector = ('input[name="code"], input[autocomplete="one-time-code"]'
-                                  if kind == "code"
-                                  else 'input[name="captchaText"], input[type="text"]')
-                target = page.query_selector(field_selector)
+                # Поле выбирается по странице, а не по виду ответа. Прежняя
+                # логика «цифры - значит код» ломалась на первом же шаге: hh
+                # просит телефон, телефон состоит из цифр, и ответ уходил в
+                # поле кода, которого на странице ещё нет.
+                target = _first_input(page)
                 if target is None:
-                    send_message("Поле для ответа на странице не найдено. "
-                                 "Нужен ручной вход.")
+                    send_message("На странице нет поля для ввода. Пришли, что видишь "
+                                 "на снимке, или войди вручную.")
                     return {"ok": False, "steps": steps, "note": "поле не найдено"}
+                # Телефон и код hh принимает только цифрами, остальное - как есть.
+                value = digits(answer) if kind == "code" else answer.strip()
                 target.fill(value)
                 page.keyboard.press("Enter")
                 page.wait_for_timeout(5000)
+                # После ввода hh часто показывает ещё одну кнопку подтверждения.
+                if _first_input(page) is None and advances < MAX_ADVANCES:
+                    pressed = _advance(page, ADVANCE, SKIP)
+                    if pressed:
+                        advances += 1
+                        steps.append(f"кнопка «{pressed}»")
+                        page.wait_for_timeout(4000)
 
-                if "/applicant" in page.url or "/account/login" not in page.url:
+                if signed_in(page):
                     send_message("Вход выполнен.")
                     return {"ok": True, "steps": steps}
 
-            send_message("Вход не завершился после двух шагов. Нужен ручной вход.")
+            send_message("Вход не завершился после трёх шагов. Нужен ручной вход.")
             return {"ok": False, "steps": steps, "note": "шаги кончились"}
         finally:
             clear()

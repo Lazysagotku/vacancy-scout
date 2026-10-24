@@ -16,6 +16,20 @@ _stop = threading.Event()
 _start_lock = threading.Lock()
 COMMANDS = {"/start", "/status", "/preview", "/prepare", "/questions", "/login", "/apply"}
 
+# Сколько секунд команда считается свежей. Окно защищает от повтора старой
+# команды, когда Telegram отдаёт накопленную очередь. Прежние 120 секунд были
+# слишком узкими: после перезапуска сервиса команда человека терялась молча,
+# и 23.10 на этом потерялись /login и /status. Накопленная очередь теперь
+# отбрасывается при старте опроса, поэтому окно можно держать шире.
+FRESH_SECONDS = 600
+
+# Допуск на расхождение часов. Отметку времени ставит сервер Telegram, а
+# сравнивают её с часами этой машины, и они расходятся. 24.10 команды Ивана
+# отбрасывались как «из будущего» при расхождении в одну секунду: нижней
+# границей стоял ноль. Две минуты покрывают обычный дрейф и не открывают
+# повтор старой команды - верхняя граница по-прежнему своя.
+CLOCK_SKEW_SECONDS = 120
+
 
 def allowed_command(update: dict, allowed_chat_id: int,
                     now: datetime | None = None) -> str | None:
@@ -34,7 +48,8 @@ def allowed_command(update: dict, allowed_chat_id: int,
             or chat.get("type") != "private" or chat.get("id") != allowed_chat_id
             or sender.get("id") != allowed_chat_id or sender.get("is_bot") is not False
             or not isinstance(stamp, int) or not isinstance(text, str)
-            or len(text) > 64 or not 0 <= now.timestamp() - stamp <= 120):
+            or len(text) > 64
+            or not -CLOCK_SKEW_SECONDS <= now.timestamp() - stamp <= FRESH_SECONDS):
         return None
     if text in COMMANDS:
         return text
@@ -44,6 +59,50 @@ def allowed_command(update: dict, allowed_chat_id: int,
     if hh_login.awaiting() is not None and 1 <= len(text) <= 32:
         return "::answer::" + text
     return None
+
+
+def refusal_reason(update: dict, allowed_chat_id: int,
+                   now: datetime | None = None) -> str:
+    """Какая именно проверка отвергла сообщение. Только для журнала.
+
+    Общая строка «не команда, чужой чат или старше срока» покрывала семь
+    разных условий, и разобрать по ней молчание бота было нельзя. Содержимое
+    сообщения сюда не попадает: ответы на вход содержат коды подтверждения.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not isinstance(update, dict):
+        return "обновление не словарь"
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return "в обновлении нет message (правка, реакция или служебное)"
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+    text = message.get("text")
+    stamp = message.get("date")
+    if not isinstance(chat, dict) or chat.get("type") != "private":
+        return f"чат не личный: {chat.get('type')!r}"
+    if chat.get("id") != allowed_chat_id:
+        return f"чужой чат: {chat.get('id')!r} вместо {allowed_chat_id!r}"
+    if not isinstance(sender, dict) or sender.get("id") != allowed_chat_id:
+        return f"чужой отправитель: {sender.get('id')!r}"
+    if sender.get("is_bot") is not False:
+        return f"отправитель помечен ботом: {sender.get('is_bot')!r}"
+    if not isinstance(text, str):
+        return "сообщение без текста"
+    if len(text) > 64:
+        return f"текст длиной {len(text)} символов"
+    if not isinstance(stamp, int):
+        return "нет отметки времени"
+    age = now.timestamp() - stamp
+    if age < -CLOCK_SKEW_SECONDS:
+        return (f"отметка времени в будущем на {abs(age):.0f} с "
+                f"при допуске {CLOCK_SKEW_SECONDS}")
+    if age > FRESH_SECONDS:
+        return f"старше окна: {age:.0f} с при пределе {FRESH_SECONDS}"
+    from scout import hh_login
+    if hh_login.awaiting() is None:
+        return "текст не команда и вход сейчас не запрашивается"
+    return "длина ответа вне 1-32 символов"
 
 
 def handle_update(update: dict, allowed_chat_id: int, send,
@@ -115,6 +174,20 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
 
     offset: int | None = None
     misses = 0
+
+    # Накопленная очередь отбрасывается до первой обработки: команды, посланные
+    # пока сервис лежал, выполнять нельзя - человек уже не ждёт их результата.
+    try:
+        backlog = bot.get_updates(offset=None, timeout=0)
+        for update in backlog:
+            update_id = update.get("update_id") if isinstance(update, dict) else None
+            if isinstance(update_id, int):
+                offset = max(offset or 0, update_id + 1)
+        if backlog:
+            log.info("telegram: отброшено накопленных сообщений: %s", len(backlog))
+    except TelegramError:
+        pass                      # нет связи - начнём с нуля на первом круге
+
     while not _stop.is_set():
         try:
             updates = bot.get_updates(offset=offset, timeout=10)
@@ -123,6 +196,17 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
                 update_id = update.get("update_id") if isinstance(update, dict) else None
                 if isinstance(update_id, int):
                     offset = max(offset or 0, update_id + 1)
+                # Отклонённое сообщение исчезало без следа, и молчание бота
+                # нельзя было отличить от мёртвого потока опроса. Текст в лог
+                # не попадает: ответы на вход содержат коды подтверждения.
+                taken = allowed_command(update, chat_id)
+                if taken is None:
+                    log.info("telegram: сообщение отклонено - %s",
+                             refusal_reason(update, chat_id))
+                elif taken.startswith("::answer::"):
+                    log.info("telegram: принят ответ для входа")
+                else:
+                    log.info("telegram: принята команда %s", taken)
                 handle_update(
                     update, chat_id, bot.send_message, runner.status,
                     lambda: application_preview(store.list_finds(), response_form.all_forms()),
@@ -145,6 +229,28 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
         except Exception:
             log.exception("Ошибка обработчика Telegram без содержимого сообщения")
             _stop.wait(15)
+
+
+def channel() -> tuple:
+    """Пара функций отправки в личный чат, или (None, None) без настройки.
+
+    Нужна фоновому кругу откликов: когда сессия hh слетает посреди пачки,
+    человека надо позвать туда же, где он отвечает на вход. Токен и chat id
+    остаются внутри модуля, наружу уходят только замыкания.
+    """
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    raw_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not raw_chat_id:
+        return (None, None)
+    try:
+        chat_id = int(raw_chat_id)
+        if chat_id <= 0:
+            return (None, None)
+        bot = TelegramClient(token)
+    except ValueError:
+        return (None, None)
+    return (lambda png, caption="": bot.send_photo(chat_id, png, caption),
+            lambda text: bot.send_message(chat_id, text))
 
 
 def start_if_configured() -> bool:

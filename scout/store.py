@@ -133,6 +133,15 @@ LATER_COLUMNS = {
 }
 
 
+# Ответ hh на отправленный отклик (23.10). Без исхода пороги отправки
+# подбираются вслепую: видно, сколько ушло, и не видно, что из этого сработало.
+APPLICATION_COLUMNS = {
+    "response":      "TEXT",     # invited | rejected | viewed | silent
+    "response_at":   "TEXT",     # когда исход прочитан со страницы откликов
+    "response_note": "TEXT",     # что именно написано на странице
+}
+
+
 def init() -> None:
     with connect() as con:
         con.executescript(SCHEMA)
@@ -140,6 +149,10 @@ def init() -> None:
         for name, kind in LATER_COLUMNS.items():
             if name not in cols:
                 con.execute(f"ALTER TABLE finds ADD COLUMN {name} {kind}")
+        made = {row[1] for row in con.execute("PRAGMA table_info(applications)")}
+        for name, kind in APPLICATION_COLUMNS.items():
+            if name not in made:
+                con.execute(f"ALTER TABLE applications ADD COLUMN {name} {kind}")
         for key, value in DEFAULTS.items():
             con.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
@@ -292,6 +305,41 @@ def log_application(vacancy_id: str, mode: str, outcome: str, **fields) -> dict:
             tuple(row.values()),
         )
     return row
+
+
+def set_response(vacancy_id: str, response: str, note: str = "") -> None:
+    """Записать, чем hh ответил на отправленный отклик.
+
+    Нужно для обратной связи: без исхода пороги подбираются вслепую.
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    with connect() as con:
+        con.execute(
+            "UPDATE applications SET response = ?, response_at = ?, response_note = ? "
+            "WHERE vacancy_id = ?", (response, now, note[:200], vacancy_id))
+
+
+def sent_applications() -> list[dict]:
+    """Все реально отправленные отклики с их исходом."""
+    with connect() as con:
+        rows = con.execute(
+            "SELECT * FROM applications WHERE outcome = 'sent' ORDER BY sent_at"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def sent_today(now: datetime | None = None) -> int:
+    """Сколько откликов реально ушло за сегодня.
+
+    Нужен автоматическому кругу: hh считает частоту откликов, и пачка в двести
+    штук за час выглядит как робот даже при честном содержании.
+    """
+    day = (now or datetime.now()).date().isoformat()
+    with connect() as con:
+        row = con.execute(
+            "SELECT COUNT(*) FROM applications WHERE outcome = 'sent' AND sent_at LIKE ?",
+            (day + "%",)).fetchone()
+    return int(row[0] if row else 0)
 
 
 def applications(limit: int = 100) -> list[dict]:

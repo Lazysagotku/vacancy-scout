@@ -6,7 +6,10 @@ from unittest.mock import patch
 
 from scout import apply, hh_login, profile, recheck
 
-NOW = datetime(2026, 10, 13, 12, 0)
+# Точка отсчёта берётся от текущего момента намеренно. Зашитая дата делала
+# тесты свежести одноразовыми: ворота отправки пускают карточку моложе 72
+# часов, и набор, зелёный 14 октября, падал 23-го без единой правки кода.
+NOW = datetime.now()
 SALARY = "Ожидания по доходу - 200 000 рублей на руки."
 
 
@@ -88,6 +91,37 @@ class RecheckTests(unittest.TestCase):
         self.assertEqual(fields["status"], "dropped")
         self.assertIn("архиве", fields["drop_reason"])
 
+    def test_unreachable_page_is_a_miss_not_a_live_vacancy(self):
+        # Сборщик на недоступной вакансии отдаёт не None, а пустой разбор.
+        # Проверка `details is None` его не ловила, и такая карточка
+        # записывалась живой с обнулённым счётчиком промахов.
+        empty = {"archived_at": "", "description": "", "title": ""}
+        self.assertTrue(recheck.page_missed(empty))
+        fields = recheck.verdict_for(find(), empty)
+        self.assertEqual(fields["check_misses"], 1)
+        self.assertNotIn("status", fields)
+
+    def test_page_with_description_is_alive(self):
+        alive = {"archived_at": "", "description": "Поддержка систем, Linux"}
+        self.assertFalse(recheck.page_missed(alive))
+        self.assertEqual(recheck.verdict_for(find(), alive)["check_misses"], 0)
+
+    def test_every_page_is_saved_before_the_batch_ends(self):
+        # Проверка VPN на последней карточке раньше выбрасывала труд по всем
+        # предыдущим: запись шла после всей пачки.
+        saved = []
+
+        def fetch(ids, on_progress=None, on_item=None):
+            on_item(ids[0], {"archived_at": "5 октября", "description": ""})
+            raise RuntimeError("hh просит пройти проверку VPN")
+
+        cards = [find(id="1"), find(id="2")]
+        with patch("scout.recheck.stale_first", return_value=cards),              patch("scout.recheck.store.list_finds", return_value=cards),              patch("scout.recheck.store.update_find",
+                   side_effect=lambda i, **f: saved.append((i, f["status"]))),              patch("scout.collector.fetch_details", side_effect=fetch):
+            with self.assertRaises(RuntimeError):
+                recheck.recheck(limit=2)
+        self.assertEqual(saved, [("1", "dropped")])
+
     def test_single_network_miss_keeps_the_card(self):
         fields = recheck.verdict_for(find(), None)
         self.assertNotIn("status", fields)
@@ -97,6 +131,43 @@ class RecheckTests(unittest.TestCase):
         fields = recheck.verdict_for(find(check_misses=2), None)
         self.assertEqual(fields["status"], "dropped")
         self.assertEqual(fields["check_misses"], 3)
+
+
+class CloseStaleTests(unittest.TestCase):
+    def old(self, **changes):
+        return find(found_at=(NOW - timedelta(days=40)).isoformat(), **changes)
+
+    def test_card_past_the_window_is_closed(self):
+        tail = recheck.stale_tail([self.old()], now=NOW)
+        self.assertEqual(len(tail), 1)
+
+    def test_fresh_card_is_left_alone(self):
+        self.assertEqual(recheck.stale_tail([find(found_at=NOW.isoformat())], now=NOW), [])
+
+    def test_pinned_card_is_never_closed_by_age(self):
+        # Закрепил человек руками - возраст такую карточку не трогает.
+        self.assertEqual(recheck.stale_tail([self.old(pinned_at=NOW.isoformat())], now=NOW), [])
+
+    def test_recently_confirmed_alive_card_is_kept(self):
+        seen = (NOW - timedelta(days=2)).isoformat()
+        self.assertEqual(recheck.stale_tail([self.old(checked_at=seen)], now=NOW), [])
+
+    def test_long_ago_checked_card_is_closed_again(self):
+        seen = (NOW - timedelta(days=30)).isoformat()
+        self.assertEqual(len(recheck.stale_tail([self.old(checked_at=seen)], now=NOW)), 1)
+
+    def test_dry_run_writes_nothing(self):
+        with patch("scout.recheck.store.list_finds", return_value=[self.old()]),              patch("scout.recheck.store.update_find") as write:
+            result = recheck.close_stale(now=NOW)
+        self.assertEqual(result["closed"], 1)
+        write.assert_not_called()
+
+    def test_reason_names_the_age(self):
+        with patch("scout.recheck.store.list_finds", return_value=[self.old()]),              patch("scout.recheck.store.update_find") as write:
+            recheck.close_stale(dry_run=False, now=NOW)
+        reason = write.call_args.kwargs["drop_reason"]
+        self.assertIn("устарела", reason)
+        self.assertIn("40 дн.", reason)
 
 
 class ApplyGuardTests(unittest.TestCase):
@@ -149,6 +220,163 @@ class ApplyGuardTests(unittest.TestCase):
             result = apply.apply_one("555", dry_run=False)
         self.assertFalse(result["sent"])
         self.assertEqual(result["mode"], "dry-run")
+
+
+class AutoRoundTests(unittest.TestCase):
+    """Автоматический круг откликов: порог, суточный лимит, слетевшая сессия."""
+
+    def test_score_just_over_threshold_passes(self):
+        from scout.application_plan import evaluate
+        form = {"checked_at": NOW.isoformat(), "questions": [], "has_letter": True,
+                "has_questions_flag": False, "note": ""}
+        # 61 проходит, 60 нет: решение Ивана «больше 60».
+        self.assertTrue(evaluate(find(score=61), form, now=NOW)["eligible"])
+        blocked = evaluate(find(score=60), form, now=NOW)
+        self.assertFalse(blocked["eligible"])
+        self.assertIn("ниже порога", " ".join(blocked["reasons"]))
+
+    def test_strong_verdict_is_no_longer_required(self):
+        # Раньше ворота требовали вердикт «сильный матч», и карточка с баллом
+        # 65 не проходила никогда, даже с положительным мнением модели.
+        from scout.application_plan import evaluate
+        form = {"checked_at": NOW.isoformat(), "questions": [], "has_letter": True,
+                "has_questions_flag": False, "note": ""}
+        card = find(score=65, verdict="стоит посмотреть")
+        self.assertTrue(evaluate(card, form, now=NOW)["eligible"])
+
+    def test_daily_limit_stops_the_round(self):
+        # Лимит теперь настройка, а не константа: проверяем против него же.
+        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.daily_limit", return_value=25),              patch("scout.apply.store.sent_today", return_value=25),              patch("scout.apply.apply_one") as send:
+            result = apply.auto_round(dry_run=False)
+        self.assertIn("лимит", result["skipped"])
+        send.assert_not_called()
+
+    def test_lost_session_calls_the_human_once_and_continues(self):
+        from scout.collector import CollectError
+        calls = {"n": 0}
+
+        def flaky(vacancy_id, dry_run=True):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise CollectError("Нет сессии hh - нужен вход")
+            return {"sent": True, "mode": "live"}
+
+        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.store.sent_today", return_value=0),              patch("scout.apply.ready_now", return_value=[{"id": "1"}]),              patch("scout.apply.apply_one", side_effect=flaky),              patch("scout.hh_login.login", return_value={"ok": True}) as login,              patch("time.sleep"):
+            result = apply.auto_round(lambda *a, **k: None, lambda *a: None, dry_run=False)
+        login.assert_called_once()
+        self.assertEqual(result["sent"], 1)
+
+    def test_failed_login_stops_the_round(self):
+        from scout.collector import CollectError
+        with patch("scout.apply.live_allowed", return_value=True),              patch("scout.apply.store.sent_today", return_value=0),              patch("scout.apply.ready_now", return_value=[{"id": "1"}, {"id": "2"}]),              patch("scout.apply.apply_one",
+                   side_effect=CollectError("Нет сессии hh - нужен вход")),              patch("scout.hh_login.login", return_value={"ok": False}):
+            result = apply.auto_round(lambda *a, **k: None, lambda *a: None, dry_run=False)
+        self.assertEqual(result["sent"], 0)
+        self.assertEqual(result["results"][-1]["reason"], "вход не удался")
+
+
+class LetterIsMandatoryTests(unittest.TestCase):
+    """Отклик без сопроводительного не уходит ни при каких обстоятельствах."""
+
+    class FakePage:
+        def __init__(self, has_field):
+            self.has_field = has_field
+            self.filled = None
+
+        def query_selector(self, selector):
+            if not self.has_field:
+                return None
+            page = self
+
+            class Field:
+                def fill(self, text):
+                    page.filled = text
+            return Field()
+
+        def evaluate(self, *args):
+            return None
+
+        def wait_for_timeout(self, ms):
+            return None
+
+    def test_missing_letter_field_stops_the_application(self):
+        from scout.collector import CollectError
+        page = self.FakePage(has_field=False)
+        with self.assertRaises(CollectError) as caught:
+            apply._fill_form(page, letter_for(), "Специалист сопровождения систем", [])
+        self.assertIn("без письма", str(caught.exception))
+
+    def test_letter_is_placed_when_the_field_exists(self):
+        page = self.FakePage(has_field=True)
+        apply._fill_form(page, letter_for(), "Специалист сопровождения систем", [])
+        self.assertIn("Откликаюсь на позицию", page.filled)
+
+
+class LoginAdvanceTests(unittest.TestCase):
+    """Шаги без полей сценарий обязан проходить сам."""
+
+    class Page:
+        def __init__(self, controls):
+            self.controls = controls
+            self.clicked = []
+
+        def evaluate(self, script, args):
+            advance, skip = args
+            import re
+            ok, no = re.compile(advance, re.I), re.compile(skip, re.I)
+            for text in self.controls:
+                if ok.search(text) and not no.search(text):
+                    self.clicked.append(text)
+                    self.controls.remove(text)
+                    return text
+            return ""
+
+    def press(self, controls):
+        page = self.Page(list(controls))
+        pressed = hh_login._advance(page, hh_login.ADVANCE, hh_login.SKIP)
+        return pressed, page
+
+    def test_login_button_is_pressed(self):
+        pressed, _ = self.press(["Войти", "Зарегистрироваться"])
+        self.assertEqual(pressed, "Войти")
+
+    def test_registration_is_never_pressed(self):
+        # У Ивана аккаунт есть; создавать второй сценарий не должен.
+        pressed, _ = self.press(["Зарегистрироваться"])
+        self.assertEqual(pressed, "")
+
+    def test_employer_role_is_skipped(self):
+        pressed, _ = self.press(["Я ищу сотрудником"])
+        self.assertEqual(pressed, "")
+
+    def test_nothing_to_press_returns_empty(self):
+        pressed, _ = self.press(["Забыли пароль?"])
+        self.assertEqual(pressed, "")
+
+
+class SignedInTests(unittest.TestCase):
+    """Успех входа определяется страницей, а не адресом."""
+
+    class Page:
+        def __init__(self, result):
+            self.result = result
+
+        def evaluate(self, script):
+            return self.result
+
+    def test_login_form_means_not_signed_in(self):
+        # Адрес после выбора роли содержит «/applicant», и прежняя проверка
+        # рапортовала об успехе, ни разу не спросив телефон.
+        self.assertFalse(hh_login.signed_in(self.Page(False)))
+
+    def test_applicant_sections_mean_signed_in(self):
+        self.assertTrue(hh_login.signed_in(self.Page(True)))
+
+    def test_broken_page_is_not_signed_in(self):
+        class Dead:
+            def evaluate(self, script):
+                raise RuntimeError("страница закрыта")
+        self.assertFalse(hh_login.signed_in(Dead()))
 
 
 class LoginRelayTests(unittest.TestCase):

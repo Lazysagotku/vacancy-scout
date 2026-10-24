@@ -196,24 +196,41 @@ def analyze_find(vacancy_id: str, deep: bool = True) -> dict:
     return _save(find, find.get("description") or "", write_letter=False)
 
 
-def peek_forms(finds: list[dict], limit: int = 8) -> int:
+def peek_forms(finds: list[dict], limit: int = 8, force: bool = False) -> int:
     """Снимает вопросы формы отклика у самых подходящих находок.
 
     Открывать форму у каждой вакансии дорого: это отдельная загрузка
     страницы плюс клик. Поэтому берём только тех, к кому реально пойдёт
     отклик - у остальных вопросы всё равно не понадобятся.
+
+    `force` переснимает уже известные формы. Нужен после правок разбора: 23.10
+    разбор научился отличать собственный виджет hh от вопроса работодателя и
+    видеть кнопку сопроводительного, а в базе остались формы по прежним
+    правилам.
     """
     from scout import response_form
 
     worth = [f for f in finds
-             if (f.get("score") or 0) >= 60 and not response_form.known(f["id"])]
+             if (f.get("score") or 0) >= 60
+             and (force or not response_form.known(f["id"]))]
     done = 0
+    misses = 0
     for find in worth[:limit]:
         try:
             response_form.peek(find["id"])
             done += 1
-        except Exception:
-            break            # сессия отвалилась - дальше смысла нет
+            misses = 0
+        except Exception as problem:
+            # Отдельная вакансия может показать форму регистрации при живой
+            # сессии: так ведут себя вакансии, требующие подтверждения входа.
+            # Прежний голый break считал это потерей сессии и обрывал всю
+            # пачку на первой же такой вакансии, оставляя остальных без форм.
+            misses += 1
+            log.warning("форма %s не снялась (%s подряд): %s: %s", find["id"],
+                        misses, type(problem).__name__, str(problem)[:200])
+            if misses >= 3:
+                log.warning("три отказа подряд - похоже на потерю сессии, разведка прервана")
+                break
     return done
 
 

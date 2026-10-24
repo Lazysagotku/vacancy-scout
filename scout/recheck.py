@@ -31,6 +31,16 @@ BATCH = 40
 # Карточку младше этого срока перепроверять незачем: она только что собрана.
 MIN_AGE = timedelta(hours=24)
 
+# Разобранная карточка старше окна выдачи мертва примерно в двух случаях из
+# трёх: 14.10 проверка 120 самых давно смотренных дала 82 архива. Тратить на
+# такой хвост браузер дороже, чем закрыть его по возрасту - карточка остаётся
+# в базе и возвращается кнопкой «Вернуть в список».
+STALE_AFTER = timedelta(days=MAX_AGE_DAYS)
+
+# Карточку, которую недавно видели живой, возраст не закрывает: она старая по
+# дате находки, но проверена своими глазами.
+ALIVE_TRUST = timedelta(days=7)
+
 
 def _parsed(value: str | None) -> datetime | None:
     try:
@@ -77,6 +87,22 @@ def stale_first(finds: list[dict], now: datetime | None = None,
     return [find for _, _, find in todo[:max(0, limit)]]
 
 
+def page_missed(details: dict | None) -> bool:
+    """Страница не отдалась.
+
+    Сборщик на недоступной вакансии возвращает не None, а пустой разбор, и
+    проверка `details is None` его не ловила: такая карточка записывалась живой
+    с обнулённым счётчиком промахов. За два прогона, 150 проверок, «не
+    открывается» не выпало ни разу - при том, что часть вакансий отдаёт 404.
+
+    У живой вакансии есть описание, у архивной - дата архива. Нет ни того ни
+    другого - страницы мы не видели.
+    """
+    if details is None:
+        return True
+    return not details.get("archived_at") and not details.get("description")
+
+
 def verdict_for(find: dict, details: dict | None) -> dict:
     """Что записать в базу по ответу страницы.
 
@@ -84,7 +110,7 @@ def verdict_for(find: dict, details: dict | None) -> dict:
     Пустой словарь означает «ничего не менять».
     """
     now = datetime.now().isoformat(timespec="seconds")
-    if details is None:
+    if page_missed(details):
         # Страница не отдалась. Один раз это сеть, три раза подряд - вакансии
         # уже нет. Снимаем с карточки статус разобранной только на третий раз,
         # иначе разведчик будет хоронить живые вакансии при обрыве связи.
@@ -103,21 +129,29 @@ def verdict_for(find: dict, details: dict | None) -> dict:
 
 
 def recheck(limit: int = BATCH, on_progress=None) -> dict:
-    """Пройтись по протухшим карточкам и обновить их состояние."""
+    """Пройтись по протухшим карточкам и обновить их состояние.
+
+    Результат каждой страницы пишется сразу. Раньше запись шла после всей
+    пачки, и проверка VPN на последней карточке выбрасывала труд по всем
+    предыдущим: 120 открытых страниц уходили впустую.
+    """
     from scout import collector
 
     todo = stale_first(store.list_finds("analyzed"), limit=limit)
     if not todo:
         return {"checked": 0, "archived": 0, "gone": 0, "alive": 0}
 
-    details = collector.fetch_details([find["id"] for find in todo],
-                                      on_progress=on_progress)
+    by_id = {find["id"]: find for find in todo}
     counts = {"checked": 0, "archived": 0, "gone": 0, "alive": 0}
-    for find in todo:
-        fields = verdict_for(find, details.get(find["id"]))
+
+    def save(vacancy_id: str, details: dict) -> None:
+        find = by_id.get(vacancy_id)
+        if find is None:
+            return
+        fields = verdict_for(find, details)
         if not fields:
-            continue
-        store.update_find(find["id"], **fields)
+            return
+        store.update_find(vacancy_id, **fields)
         counts["checked"] += 1
         if fields.get("archived_at"):
             counts["archived"] += 1
@@ -125,8 +159,60 @@ def recheck(limit: int = BATCH, on_progress=None) -> dict:
             counts["gone"] += 1
         else:
             counts["alive"] += 1
+
+    try:
+        collector.fetch_details(list(by_id), on_progress=on_progress, on_item=save)
+    except Exception:
+        # Прочитанное уже записано; остаток доберёт следующий заход.
+        log.exception("перепроверка прервана, записано %s", counts["checked"])
+        raise
     log.info("перепроверка: %s", counts)
     return counts
+
+
+def stale_tail(finds: list[dict], now: datetime | None = None) -> list[dict]:
+    """Хвост базы: разобранные находки старше окна выдачи.
+
+    Закреплённые не трогаем - Иван поднял их руками. Подтверждённые живыми за
+    последнюю неделю тоже: возраст находки у них большой, но страница открыта
+    и прочитана.
+    """
+    now = now or datetime.now()
+    tail = []
+    for find in finds:
+        if find.get("status") != "analyzed" or find.get("pinned_at"):
+            continue
+        found = _parsed(find.get("found_at"))
+        if found is None or now - found <= STALE_AFTER:
+            continue
+        checked = _parsed(find.get("checked_at"))
+        if checked is not None and now - checked <= ALIVE_TRUST:
+            continue
+        tail.append(find)
+    return tail
+
+
+def close_stale(dry_run: bool = True, limit: int = 0,
+                now: datetime | None = None) -> dict:
+    """Закрыть хвост по возрасту. По умолчанию ничего не пишет.
+
+    Карточки уходят в «отсеянные» с причиной, по которой видно, что это
+    возраст, а не отказ разведчика по сути вакансии.
+    """
+    now = now or datetime.now()
+    tail = stale_tail(store.list_finds("analyzed"), now=now)
+    if limit > 0:
+        tail = tail[:limit]
+    for find in tail:
+        if dry_run:
+            continue
+        days = (now - _parsed(find["found_at"])).days
+        store.update_find(find["id"], status="dropped",
+                          drop_reason=f"устарела: найдена {days} дн. назад, "
+                                      f"на hh не проверялась")
+    return {"dry_run": dry_run, "closed": len(tail),
+            "examples": [{"id": f["id"], "name": f.get("name"),
+                          "found_at": f.get("found_at")} for f in tail[:10]]}
 
 
 def refresh_resumes(dry_run: bool = True) -> dict:

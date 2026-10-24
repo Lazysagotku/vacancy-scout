@@ -30,9 +30,16 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent
 
 @app.on_event("startup")
 def on_startup() -> None:
+    import logging
+    # Без явной настройки записи сообщения уровня INFO не доходят до файла,
+    # и журнал сервиса выглядел пустым даже там, где код честно логировал.
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     store.init()
     runner.resume_if_enabled()
-    telegram_worker.start_if_configured()
+    started = telegram_worker.start_if_configured()
+    logging.getLogger(__name__).info(
+        "старт: telegram-бот %s", "подключён" if started else "не настроен")
 
 
 @app.on_event("shutdown")
@@ -64,6 +71,8 @@ class Settings(BaseModel):
     analyze_limit: int | None = None
     letter_limit: int | None = None
     recheck_limit: int | None = None
+    auto_apply: bool | None = None
+    live_apply: bool | None = None
 
 
 @app.post("/api/settings", tags=["скаутинг"])
@@ -76,6 +85,12 @@ def save_settings(payload: Settings):
         store.set_setting("analyze_limit", max(0, min(300, payload.analyze_limit)))
     if payload.letter_limit is not None:
         store.set_setting("letter_limit", max(0, min(100, payload.letter_limit)))
+    if payload.auto_apply is not None:
+        store.set_setting("auto_apply", "1" if payload.auto_apply else "0")
+    if payload.live_apply is not None:
+        # Живая отправка - отдельный выключатель от автоматического круга:
+        # круг можно гонять вхолостую и смотреть журнал, ничего не отправляя.
+        store.set_setting("live_apply", "1" if payload.live_apply else "0")
     if payload.recheck_limit is not None:
         # 0 выключает перепроверку живости в цикле сбора.
         store.set_setting("recheck_limit", max(0, min(200, payload.recheck_limit)))
@@ -143,6 +158,54 @@ def application_preview(limit: int = Query(default=30, ge=1, le=100)):
 def recheck_finds(limit: int = Query(default=40, ge=1, le=200)):
     """Перепроверяет разобранные карточки: архив и страницы, которые не открываются."""
     return runner.recheck_once(limit)
+
+
+@app.post("/api/applications/auto", tags=["отклики"])
+def applications_auto(live: bool = Query(default=False)):
+    """Один круг откликов. Без ?live=true ничего не отправляет."""
+    from scout import apply, telegram_worker
+    send_photo, send_message = telegram_worker.channel()
+    return apply.auto_round(send_photo, send_message, dry_run=not live)
+
+
+@app.get("/api/applications/ready", tags=["отклики"])
+def applications_ready(limit: int = Query(default=25, ge=1, le=100)):
+    """Кто готов к отправке прямо сейчас, с баллом и работодателем."""
+    from scout import apply
+    ready = apply.ready_now(limit)
+    cards = {str(f.get("id")): f for f in store.list_finds()}
+    out = []
+    for item in ready:
+        card = cards.get(str(item["id"]), {})
+        out.append({"id": item["id"], "score": card.get("score"),
+                    "name": card.get("name"), "employer": card.get("employer"),
+                    "resume": card.get("resume"), "opinion": card.get("opinion"),
+                    "url": card.get("url")})
+    return {"ready": len(out), "daily_limit": apply.DAILY_LIMIT,
+            "sent_today": store.sent_today(),
+            "auto_apply": store.get_setting("auto_apply", "0") == "1",
+            "live_apply": apply.live_allowed(), "items": out}
+
+
+@app.get("/api/learning/report", tags=["обратная связь"])
+def learning_report():
+    """Что сработало: доли ответов по баллу, мнению, треку, резюме, письму."""
+    from scout import learning
+    return {"report": learning.report(), "advice": learning.advice()}
+
+
+@app.post("/api/learning/collect", tags=["обратная связь"])
+def learning_collect(pages: int = Query(default=5, ge=1, le=20)):
+    """Прочитать со страницы откликов hh, чем ответили на отправленное."""
+    from scout import learning
+    return learning.collect(limit_pages=pages)
+
+
+@app.post("/api/finds/close-stale", tags=["находки"])
+def close_stale_finds(apply_changes: bool = Query(default=False, alias="apply")):
+    """Закрывает хвост базы по возрасту. Без ?apply=true только показывает, сколько."""
+    from scout import recheck
+    return recheck.close_stale(dry_run=not apply_changes)
 
 
 @app.post("/api/finds/refresh-resumes", tags=["находки"])

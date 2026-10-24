@@ -35,5 +35,31 @@ class AnalyzeBatchErrorTests(unittest.TestCase):
         self.assertIn("маршрут к hh", runner._state.last_error or "")
 
 
+class SessionGuardTests(unittest.TestCase):
+    """Цикл обязан звать человека, когда сессия hh слетела."""
+
+    def test_live_session_calls_nobody(self):
+        with patch("scout.runner.store.get_setting", return_value="1"),              patch("scout.collector.is_authorized", return_value=True),              patch("scout.hh_login.login") as login:
+            runner._state.running = True
+            runner._state.busy = False
+            runner._ensure_session()
+        login.assert_not_called()
+
+    def test_dead_session_asks_the_human(self):
+        with patch("scout.runner.store.get_setting", return_value="1"),              patch("scout.collector.is_authorized", return_value=False),              patch("scout.telegram_worker.channel",
+                   return_value=(lambda *a, **k: None, lambda *a: None)),              patch("scout.hh_login.login", return_value={"ok": True}) as login:
+            runner._state.running = True
+            runner._state.busy = False
+            runner._ensure_session()
+        login.assert_called_once()
+
+    def test_without_telegram_it_only_warns(self):
+        with patch("scout.runner.store.get_setting", return_value="1"),              patch("scout.collector.is_authorized", return_value=False),              patch("scout.telegram_worker.channel", return_value=(None, None)),              patch("scout.hh_login.login") as login:
+            runner._state.running = True
+            runner._state.busy = False
+            runner._ensure_session()
+        login.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
