@@ -312,6 +312,48 @@ class LetterIsMandatoryTests(unittest.TestCase):
         self.assertIn("Откликаюсь на позицию", page.filled)
 
 
+class LoginAdvanceTests(unittest.TestCase):
+    """Шаги без полей сценарий обязан проходить сам."""
+
+    class Page:
+        def __init__(self, controls):
+            self.controls = controls
+            self.clicked = []
+
+        def evaluate(self, script, args):
+            advance, skip = args
+            import re
+            ok, no = re.compile(advance, re.I), re.compile(skip, re.I)
+            for text in self.controls:
+                if ok.search(text) and not no.search(text):
+                    self.clicked.append(text)
+                    self.controls.remove(text)
+                    return text
+            return ""
+
+    def press(self, controls):
+        page = self.Page(list(controls))
+        pressed = hh_login._advance(page, hh_login.ADVANCE, hh_login.SKIP)
+        return pressed, page
+
+    def test_login_button_is_pressed(self):
+        pressed, _ = self.press(["Войти", "Зарегистрироваться"])
+        self.assertEqual(pressed, "Войти")
+
+    def test_registration_is_never_pressed(self):
+        # У Ивана аккаунт есть; создавать второй сценарий не должен.
+        pressed, _ = self.press(["Зарегистрироваться"])
+        self.assertEqual(pressed, "")
+
+    def test_employer_role_is_skipped(self):
+        pressed, _ = self.press(["Я ищу сотрудником"])
+        self.assertEqual(pressed, "")
+
+    def test_nothing_to_press_returns_empty(self):
+        pressed, _ = self.press(["Забыли пароль?"])
+        self.assertEqual(pressed, "")
+
+
 class LoginRelayTests(unittest.TestCase):
     def setUp(self):
         hh_login.clear()
