@@ -241,25 +241,43 @@ def open_login(wait_minutes: int = 10) -> None:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE), headless=False,
-            viewport={"width": 1280, "height": 900},
-        )
+        try:
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=str(PROFILE), headless=False,
+                viewport={"width": 1280, "height": 900},
+            )
+        except Exception as problem:
+            # Профиль браузера блокируется тем, кто открыл его первым. Пока
+            # идёт сбор, вход открыть нельзя, и человеку нужно сказать прямо,
+            # а не показывать окно, которое закроется само.
+            raise CollectError(
+                "Браузер занят сбором. Останови скаут и попробуй войти снова."
+            ) from problem
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://hh.ru/", wait_until="domcontentloaded", timeout=45_000)
         deadline = wait_minutes * 60 * 1000
         step = 3000
         waited = 0
         while waited < deadline:
+            if not context.pages:
+                break                           # окно закрыли - значит вошли
             try:
-                if not context.pages:
-                    break                       # окно закрыли - значит вошли
                 page.wait_for_timeout(step)
-                waited += step
-                if page.evaluate("() => !!document.querySelector('[data-qa=\"mainmenu_applicantProfile\"]')"):
-                    break                       # появилось меню профиля - вход есть
             except Exception:
-                break
+                break                           # страницы больше нет
+            waited += step
+            # Проверка входа обязана переживать навигацию. Нажатие «Войти»
+            # уничтожает контекст страницы, и page.evaluate падает с
+            # «execution context destroyed». Раньше эта ошибка ловилась общим
+            # except и закрывала браузер ровно в тот момент, когда человек
+            # начинал вход.
+            try:
+                signed_in = page.evaluate(
+                    "() => !!document.querySelector('[data-qa=\"mainmenu_applicantProfile\"]')")
+            except Exception:
+                continue                        # страница перезагружается, ждём дальше
+            if signed_in:
+                break                           # появилось меню профиля - вход есть
         try:
             context.close()
         except Exception:
