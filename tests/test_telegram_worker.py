@@ -108,5 +108,31 @@ class FreshnessWindowTests(unittest.TestCase):
         self.assertIsNone(got)
 
 
+class RefusalReasonTests(unittest.TestCase):
+    """Причина отклонения обязана называть конкретную проверку."""
+
+    def test_foreign_chat(self):
+        reason = telegram_worker.refusal_reason(update(chat_id=99), 42, now=NOW)
+        self.assertIn("чужой чат", reason)
+
+    def test_group_chat(self):
+        reason = telegram_worker.refusal_reason(update(chat_type="group"), 42, now=NOW)
+        self.assertIn("не личный", reason)
+
+    def test_stale_message_names_the_age(self):
+        reason = telegram_worker.refusal_reason(
+            update(age=telegram_worker.FRESH_SECONDS + 5), 42, now=NOW)
+        self.assertIn("старше окна", reason)
+
+    def test_edited_message_has_no_message_field(self):
+        # Правка сообщения приходит как edited_message, и фильтр её не видит.
+        reason = telegram_worker.refusal_reason({"update_id": 7, "edited_message": {}}, 42, now=NOW)
+        self.assertIn("нет message", reason)
+
+    def test_unknown_text_says_so(self):
+        reason = telegram_worker.refusal_reason(update(text="привет"), 42, now=NOW)
+        self.assertIn("не команда", reason)
+
+
 if __name__ == "__main__":
     unittest.main()

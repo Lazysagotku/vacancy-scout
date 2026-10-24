@@ -53,6 +53,49 @@ def allowed_command(update: dict, allowed_chat_id: int,
     return None
 
 
+def refusal_reason(update: dict, allowed_chat_id: int,
+                   now: datetime | None = None) -> str:
+    """Какая именно проверка отвергла сообщение. Только для журнала.
+
+    Общая строка «не команда, чужой чат или старше срока» покрывала семь
+    разных условий, и разобрать по ней молчание бота было нельзя. Содержимое
+    сообщения сюда не попадает: ответы на вход содержат коды подтверждения.
+    """
+    now = now or datetime.now(timezone.utc)
+    if not isinstance(update, dict):
+        return "обновление не словарь"
+    message = update.get("message")
+    if not isinstance(message, dict):
+        return "в обновлении нет message (правка, реакция или служебное)"
+    chat = message.get("chat") or {}
+    sender = message.get("from") or {}
+    text = message.get("text")
+    stamp = message.get("date")
+    if not isinstance(chat, dict) or chat.get("type") != "private":
+        return f"чат не личный: {chat.get('type')!r}"
+    if chat.get("id") != allowed_chat_id:
+        return f"чужой чат: {chat.get('id')!r} вместо {allowed_chat_id!r}"
+    if not isinstance(sender, dict) or sender.get("id") != allowed_chat_id:
+        return f"чужой отправитель: {sender.get('id')!r}"
+    if sender.get("is_bot") is not False:
+        return f"отправитель помечен ботом: {sender.get('is_bot')!r}"
+    if not isinstance(text, str):
+        return "сообщение без текста"
+    if len(text) > 64:
+        return f"текст длиной {len(text)} символов"
+    if not isinstance(stamp, int):
+        return "нет отметки времени"
+    age = now.timestamp() - stamp
+    if age < 0:
+        return f"отметка времени в будущем на {abs(age):.0f} с"
+    if age > FRESH_SECONDS:
+        return f"старше окна: {age:.0f} с при пределе {FRESH_SECONDS}"
+    from scout import hh_login
+    if hh_login.awaiting() is None:
+        return "текст не команда и вход сейчас не запрашивается"
+    return "длина ответа вне 1-32 символов"
+
+
 def handle_update(update: dict, allowed_chat_id: int, send,
                   status, preview, now: datetime | None = None,
                   prepare=None, questions=None, login=None, apply_run=None) -> bool:
@@ -149,8 +192,8 @@ def _poll(bot: TelegramClient, chat_id: int) -> None:
                 # не попадает: ответы на вход содержат коды подтверждения.
                 taken = allowed_command(update, chat_id)
                 if taken is None:
-                    log.info("telegram: сообщение отклонено (не команда, "
-                             "чужой чат или старше %s с)", FRESH_SECONDS)
+                    log.info("telegram: сообщение отклонено - %s",
+                             refusal_reason(update, chat_id))
                 elif taken.startswith("::answer::"):
                     log.info("telegram: принят ответ для входа")
                 else:
