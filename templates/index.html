@@ -149,6 +149,27 @@
   /* Какое резюме прикладывать - выделяем, это решение перед откликом */
   .meta .resume { background: var(--strong-bg); color: var(--strong-ink); font-weight: 600; }
   .meta .ready { background: var(--maybe-bg); color: var(--maybe-ink); font-weight: 600; }
+  /* Легенда: значения цветов и разделов иначе приходится держать в голове */
+  .legend { margin: 0 0 1rem; border: 1px solid var(--line); border-radius: 12px;
+            background: var(--card); padding: 0.7rem 1rem; }
+  .legend > summary { cursor: pointer; font-weight: 600; color: var(--accent-deep); }
+  .legend-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                 gap: 1rem 1.6rem; margin-top: 0.9rem; }
+  .legend-col h4 { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--muted);
+                   text-transform: uppercase; letter-spacing: 0.04em; }
+  .legend-col p { margin: 0 0 0.45rem; font-size: 0.87rem; line-height: 1.45; }
+  .legend-note { color: var(--muted); border-top: 1px solid var(--line); padding-top: 0.5rem;
+                 margin-top: 0.6rem !important; }
+  .lg { display: inline-block; padding: 0.05rem 0.45rem; border-radius: 6px;
+        font-weight: 600; font-size: 0.82rem; margin-right: 0.3rem; }
+  .lg.strong { background: var(--strong-bg); color: var(--strong-ink); }
+  .lg.maybe  { background: var(--maybe-bg);  color: var(--maybe-ink); }
+  .lg.weak   { background: var(--line);      color: var(--muted); }
+  .lg.skip   { background: var(--skip-bg);   color: var(--skip-ink); }
+  .lg.dead   { background: var(--skip-bg);   color: var(--skip-ink); }
+  .lg.resume { background: var(--strong-bg); color: var(--strong-ink); }
+  .lg.ready  { background: var(--maybe-bg);  color: var(--maybe-ink); }
+  .lg.unchecked, .lg.warn { color: var(--skip-ink); }
   /* Возраст и живость: вакансия закрывается быстрее, чем карточка стареет */
   .meta .dead { background: var(--skip-bg); color: var(--skip-ink); font-weight: 600; }
   .meta .unchecked { color: var(--skip-ink); }
@@ -234,6 +255,51 @@
     <div class="banner" id="banner" hidden></div>
     <div class="banner note" id="noteBanner" hidden></div>
   </section>
+
+  <!-- Легенда. Закреплена над списком: значения цветов и разделов иначе
+       приходится держать в голове, а их двенадцать. Свёрнута по умолчанию,
+       состояние запоминается в localStorage. -->
+  <details class="legend" id="legend">
+    <summary>Что означают разделы и цвета</summary>
+    <div class="legend-body">
+      <div class="legend-col">
+        <h4>Вкладки</h4>
+        <p><b>Рекомендовано</b> - короткая свежая выдача с долями Python 60%, сопровождение 30%, ИИ и C# 10%. Только вакансии моложе 14 дней и с баллом выше 45.</p>
+        <p><b>Найдено скаутом</b> - собрано, но ещё не разобрано: описание не прочитано, оценки нет.</p>
+        <p><b>Разобрано</b> - описание прочитано, балл выставлен, мнение сформировано.</p>
+        <p><b>В трекере</b> - отклик отправлен, вакансия ведётся в трекере откликов.</p>
+        <p><b>Отсеяно</b> - закрыто вручную, ушло в архив на hh либо устарело по возрасту. Возвращается кнопкой.</p>
+      </div>
+      <div class="legend-col">
+        <h4>Разделы внутри выдачи</h4>
+        <p>Карточки сгруппированы по <b>мнению модели</b>, сверху лучшие.</p>
+        <p><span class="lg op-yes">Рекомендую</span> совпадает ядро требований, блокеров нет. Идёт в отправку.</p>
+        <p><span class="lg op-plus">Под вопросом +</span> один заметный пробел, остальное совпадает. Тоже идёт в отправку.</p>
+        <p><span class="lg op-mid">Под вопросом</span> ни рыба ни мясо, на рассмотрение человеком.</p>
+        <p><span class="lg op-minus">Под вопросом -</span> пробелов несколько либо позиция ниже уровня.</p>
+        <p><span class="lg op-no">Не рекомендую</span> совпадений почти нет либо другая профессия.</p>
+        <p><b>📌 Закреплено</b> - поднято вручную, держится сверху.</p>
+        <p><b>Без мнения</b> - модель ещё не высказалась, письмо шаблонное.</p>
+      </div>
+      <div class="legend-col">
+        <h4>Цвет полосы и значка</h4>
+        <p><span class="lg strong">сильный матч</span> балл 70 и выше.</p>
+        <p><span class="lg maybe">стоит посмотреть</span> балл от 45 до 69.</p>
+        <p><span class="lg weak">слабый матч</span> балл ниже 45.</p>
+        <p><span class="lg skip">пропустить</span> есть блокер: требование, которого у Ивана нет совсем.</p>
+        <p class="legend-note">Балл считается кодом по совпадению навыков. Мнение формирует модель, прочитав описание. Они расходятся, и это нормально: балл не видит смысла, мнение видит.</p>
+      </div>
+      <div class="legend-col">
+        <h4>Подписи в карточке</h4>
+        <p><span class="lg resume">резюме: ...</span> какое из трёх резюме приложится к отклику.</p>
+        <p><span class="lg ready">описание есть</span> страница уже прочитана, разбор пойдёт без похода на hh.</p>
+        <p><span class="lg dead">в архиве</span> вакансия снята с публикации, откликаться некуда.</p>
+        <p><span class="lg unchecked">на живость не проверялась</span> страницу давно не открывали, вакансия могла закрыться.</p>
+        <p><span class="lg warn">внимание и блокеры</span> то, что помешает или потребует решения.</p>
+        <p class="legend-note">Возраст находки подписан рядом: «найдена 3 дн. назад · жива, проверена вчера».</p>
+      </div>
+    </div>
+  </details>
 
   <div class="tabs" id="tabs">
     <button data-tab="curated" class="active">Рекомендовано</button>
@@ -371,6 +437,22 @@ function freshness(v) {
   const css = found >= 7 ? ' class="unchecked"' : "";
   return '<span' + css + '>' + head + " · на живость не проверялась</span>";
 }
+
+// Состояние легенды живёт между заходами: раскрывать её каждый раз незачем,
+// а при первом знакомстве с интерфейсом она нужна открытой.
+(function legendMemory() {
+  const box = document.getElementById("legend");
+  if (!box) return;
+  try {
+    const saved = localStorage.getItem("legendOpen");
+    box.open = saved === null ? true : saved === "1";
+    box.addEventListener("toggle", () => {
+      try { localStorage.setItem("legendOpen", box.open ? "1" : "0"); } catch (e) {}
+    });
+  } catch (e) {
+    box.open = true;        // приватное окно или запрет хранилища: показываем
+  }
+})();
 
 function card(v, demo) {
   const css = v.css || (v.verdict === "сильный матч" ? "strong" : v.verdict === "пропустить" ? "skip"
