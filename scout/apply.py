@@ -80,13 +80,43 @@ def decide(find: dict, form: dict | None, now: datetime | None = None) -> dict:
     return {"ok": True, "reason": "", "answers": ready}
 
 
+def _open_letter_field(page):
+    """Раскрыть поле письма, если hh прячет его за кнопкой.
+
+    На части вакансий сопроводительное появляется только после нажатия
+    «Добавить сопроводительное письмо». Разведка формы считает такую кнопку
+    наличием поля, поэтому заполнитель обязан её нажать.
+    """
+    for selector in LETTER_SELECTORS:
+        if page.query_selector(selector):
+            return
+    page.evaluate(
+        """() => {
+            const hit = [...document.querySelectorAll('button, a, span[role="button"]')]
+                .find(el => /сопроводительн/i.test(el.innerText || ""));
+            if (hit) hit.click();
+        }"""
+    )
+    page.wait_for_timeout(900)
+
+
 def _fill_form(page, letter: str, resume: str, answers: list[dict]) -> None:
-    """Заполнить форму отклика: резюме, письмо, ответы на вопросы."""
+    """Заполнить форму отклика: резюме, письмо, ответы на вопросы.
+
+    Письмо обязательно. Правило Ивана: отклик всегда уходит с сопроводительным,
+    поэтому ненайденное поле обрывает отправку. Молчаливый пропуск означал бы
+    голый отклик от его имени - хуже, чем неотправленный.
+    """
+    _open_letter_field(page)
+    placed = False
     for selector in LETTER_SELECTORS:
         field = page.query_selector(selector)
         if field:
             field.fill(letter)
+            placed = True
             break
+    if not placed:
+        raise CollectError("Поле сопроводительного письма не найдено: отклик без письма не отправляю")
 
     if resume:
         # Резюме выбирается радиокнопкой с подписью. Точного data-qa у hh нет,
@@ -228,6 +258,103 @@ def apply_one(vacancy_id: str, dry_run: bool = True, headless: bool = True) -> d
                 context.close()
             except Exception:
                 pass
+
+
+# Сколько откликов в сутки отправляет автоматический круг. hh смотрит на
+# частоту: двести штук за час выглядят роботом даже при честном содержании.
+# Значение настраивается без правки кода: Иван меняет темп по ходу поиска.
+DEFAULT_DAILY_LIMIT = 50
+
+
+def daily_limit() -> int:
+    try:
+        return max(0, int(store.get_setting("daily_limit", str(DEFAULT_DAILY_LIMIT))))
+    except (TypeError, ValueError):
+        return DEFAULT_DAILY_LIMIT
+
+
+# Оставлено для совместимости со старыми вызовами и тестами.
+DAILY_LIMIT = DEFAULT_DAILY_LIMIT
+
+# Пауза между откликами внутри круга, секунды. Разброс намеренный.
+PACE = (20, 55)
+
+
+def ready_now(limit: int | None = None) -> list[dict]:
+    limit = daily_limit() if limit is None else limit
+    """Карточки, готовые к отправке прямо сейчас, в порядке убывания балла."""
+    from scout import response_form
+    from scout.application_plan import preview
+
+    forms = response_form.all_forms()
+    plan = preview(store.list_finds(), forms, limit=max(limit * 3, 30))
+    ready = [item for item in plan if item["eligible"]]
+    by_score = {str(f.get("id")): (f.get("score") or 0) for f in store.list_finds()}
+    ready.sort(key=lambda item: -by_score.get(str(item["id"]), 0))
+    return ready[:max(0, limit)]
+
+
+def auto_round(send_photo=None, send_message=None, dry_run: bool = True) -> dict:
+    """Один автоматический круг откликов.
+
+    Порядок намеренный: сначала проверяем остаток суточного лимита, потом
+    собираем готовых, и только потом трогаем сеть. Слетевшая сессия hh не
+    отменяет круг - модуль просит человека войти через Telegram и продолжает
+    с той же карточки.
+    """
+    import random
+    import time
+
+    from scout import hh_login
+
+    live = live_allowed() and not dry_run
+    cap = daily_limit()
+    left = cap - store.sent_today()
+    if live and left <= 0:
+        return {"mode": "live", "skipped": "суточный лимит исчерпан",
+                "sent": 0, "ready": 0}
+
+    ready = ready_now(left if live else cap)
+    results: list[dict] = []
+    sent = 0
+    relogged = False
+    position = 0
+    while position < len(ready):
+        item = ready[position]
+        try:
+            outcome = apply_one(item["id"], dry_run=not live)
+        except CollectError as problem:
+            # Сессия слетела посреди круга. Один раз зовём человека в бот и
+            # повторяем ТУ ЖЕ карточку, не сдвигая позицию: иначе вакансия,
+            # на которой сорвались, молча выпадает из круга.
+            if relogged or "сесси" not in str(problem).lower() or send_photo is None:
+                results.append({"id": item["id"], "sent": False,
+                                "reason": type(problem).__name__})
+                break
+            relogged = True
+            if send_message:
+                send_message("Сессия hh слетела посреди откликов. Пришли ответ "
+                             "для входа: цифры - код, другой текст - разгадка картинки.")
+            done = hh_login.login(send_photo, send_message)
+            if not done.get("ok"):
+                results.append({"id": item["id"], "sent": False, "reason": "вход не удался"})
+                break
+            continue
+        except VpnCheck:
+            results.append({"id": item["id"], "sent": False, "reason": "проверка VPN"})
+            break
+        except Exception as problem:
+            results.append({"id": item["id"], "sent": False,
+                            "reason": type(problem).__name__})
+            break
+        results.append({"id": item["id"], **outcome})
+        position += 1
+        if outcome.get("sent"):
+            sent += 1
+            time.sleep(random.uniform(*PACE))
+    return {"mode": "live" if live else "dry-run", "ready": len(ready),
+            "sent": sent, "left_today": cap - store.sent_today(),
+            "results": results}
 
 
 def apply_batch(limit: int = 5, dry_run: bool = True) -> dict:

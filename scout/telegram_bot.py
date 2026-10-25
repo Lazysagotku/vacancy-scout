@@ -37,8 +37,14 @@ class TelegramClient:
         try:
             with self._opener(req, timeout=15) as response:
                 data = json.load(response)
-        except Exception:
-            raise TelegramError("Telegram API недоступен") from None
+        except Exception as problem:
+            # Причина нужна в тексте: «недоступен» одинаково означало и обрыв
+            # сети, и отозванный токен, и запрет по стране. Из-за этого бот
+            # молчал три недели, а лог показывал одну и ту же строку. Сам URL
+            # в сообщение не попадает: в нём лежит токен.
+            raise TelegramError(
+                f"Telegram API не ответил на {method}: {type(problem).__name__}: "
+                f"{str(problem)[:120]}") from None
         if not isinstance(data, dict) or data.get("ok") is not True:
             raise TelegramError("Telegram API отклонил запрос")
         return data.get("result")
@@ -96,8 +102,10 @@ class TelegramClient:
         try:
             with self._opener(req, timeout=20) as response:
                 data = json.load(response)
-        except Exception:
-            raise TelegramError("Telegram API недоступен") from None
+        except Exception as problem:
+            raise TelegramError(
+                f"Telegram API не принял снимок: {type(problem).__name__}: "
+                f"{str(problem)[:120]}") from None
         if not isinstance(data, dict) or data.get("ok") is not True:
             raise TelegramError("Telegram API отклонил изображение")
 

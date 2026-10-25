@@ -241,25 +241,43 @@ def open_login(wait_minutes: int = 10) -> None:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
-        context = pw.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE), headless=False,
-            viewport={"width": 1280, "height": 900},
-        )
+        try:
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=str(PROFILE), headless=False,
+                viewport={"width": 1280, "height": 900},
+            )
+        except Exception as problem:
+            # Профиль браузера блокируется тем, кто открыл его первым. Пока
+            # идёт сбор, вход открыть нельзя, и человеку нужно сказать прямо,
+            # а не показывать окно, которое закроется само.
+            raise CollectError(
+                "Браузер занят сбором. Останови скаут и попробуй войти снова."
+            ) from problem
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://hh.ru/", wait_until="domcontentloaded", timeout=45_000)
         deadline = wait_minutes * 60 * 1000
         step = 3000
         waited = 0
         while waited < deadline:
+            if not context.pages:
+                break                           # окно закрыли - значит вошли
             try:
-                if not context.pages:
-                    break                       # окно закрыли - значит вошли
                 page.wait_for_timeout(step)
-                waited += step
-                if page.evaluate("() => !!document.querySelector('[data-qa=\"mainmenu_applicantProfile\"]')"):
-                    break                       # появилось меню профиля - вход есть
             except Exception:
-                break
+                break                           # страницы больше нет
+            waited += step
+            # Проверка входа обязана переживать навигацию. Нажатие «Войти»
+            # уничтожает контекст страницы, и page.evaluate падает с
+            # «execution context destroyed». Раньше эта ошибка ловилась общим
+            # except и закрывала браузер ровно в тот момент, когда человек
+            # начинал вход.
+            try:
+                signed_in = page.evaluate(
+                    "() => !!document.querySelector('[data-qa=\"mainmenu_applicantProfile\"]')")
+            except Exception:
+                continue                        # страница перезагружается, ждём дальше
+            if signed_in:
+                break                           # появилось меню профиля - вход есть
         try:
             context.close()
         except Exception:
@@ -384,7 +402,7 @@ def _tidy(raw: dict) -> dict:
 
 
 def fetch_details(vacancy_ids: list[str], headless: bool = True,
-                  on_progress=None) -> dict[str, dict]:
+                  on_progress=None, on_item=None) -> dict[str, dict]:
     """Читает страницы вакансий пачкой в одном браузере.
 
     Профиль браузера лежит на диске и блокируется при открытии, поэтому
@@ -394,6 +412,10 @@ def fetch_details(vacancy_ids: list[str], headless: bool = True,
     На выходе по каждому id словарь из _tidy. Пустое описание у живой
     вакансии - страница не отдалась; у архивной - archived_at заполнен,
     и описание там не нужно.
+
+    `on_item(id, details)` вызывается сразу после каждой прочитанной страницы.
+    Через него вызывающий сохраняет результат по ходу: проверка VPN на сто
+    девятнадцатой карточке иначе выбрасывала всю пачку целиком.
     """
     from playwright.sync_api import sync_playwright
 
@@ -435,6 +457,8 @@ def fetch_details(vacancy_ids: list[str], headless: bool = True,
                 except Exception as error:
                     log.warning("вакансия %s не прочиталась: %s", vacancy_id, str(error)[:300])
                     result[vacancy_id] = _tidy({})   # одна недоступная не должна рвать пачку
+                if on_item:
+                    on_item(vacancy_id, result[vacancy_id])
                 if on_progress:
                     on_progress(len(result), len(vacancy_ids))
                 pause(page)

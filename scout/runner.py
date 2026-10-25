@@ -33,6 +33,9 @@ class State:
     last_forms: int = 0            # у скольких снял вопросы формы отклика
     last_rechecked: int = 0        # сколько карточек перепроверил на живость
     last_archived: int = 0         # сколько из них оказались в архиве
+    last_closed: int = 0           # сколько закрыл по возрасту
+    last_applied: int = 0          # сколько откликов ушло в последнем круге
+    last_apply_ready: int = 0      # сколько было готово к отправке
     last_error: str | None = None
     last_note: str | None = None   # не ошибка, но человеку знать надо: сессия hh, пропущенная строка
     authorized: bool | None = None # жива ли сессия hh у браузера скаута
@@ -216,6 +219,11 @@ def _loop() -> None:
                 return
         scan_once()
         _recheck_after_scan()
+        _letters_after_scan()
+        _ensure_session()
+        _forms_after_letters()
+        _apply_after_scan()
+        _learn_after_apply()
         minutes = int(store.get_setting("interval_minutes", "180"))
         # Ждём с прерыванием: остановка не должна ждать конца интервала
         if _wake.wait(timeout=minutes * 60):
@@ -248,6 +256,153 @@ def _recheck_after_scan() -> None:
     with _lock:
         _state.last_rechecked = counts.get("checked", 0)
         _state.last_archived = counts.get("archived", 0)
+
+    # Хвост закрывается по возрасту, а не проверкой: карточка старше окна
+    # выдачи мертва в двух случаях из трёх, и обойти пять тысяч таких
+    # браузером дороже, чем они стоят. Из базы они не исчезают - возвращаются
+    # кнопкой «Вернуть в список».
+    if store.get_setting("close_stale", "1") != "1":
+        return
+    try:
+        from scout import recheck
+        closed = recheck.close_stale(dry_run=False)
+        if closed["closed"]:
+            log.info("закрыто по возрасту: %s", closed["closed"])
+        with _lock:
+            _state.last_closed = closed["closed"]
+    except Exception:
+        log.exception("Закрытие хвоста по возрасту прервано")
+
+
+def _letters_after_scan() -> None:
+    """Догнать письма и мнения по свежим карточкам.
+
+    Без письма и мнения карточка не проходит ворота отправки, поэтому круг
+    откликов без этого шага всегда находит ноль готовых.
+    """
+    with _lock:
+        if not _state.running:
+            return
+    limit = int(store.get_setting("letter_limit", "10"))
+    if limit <= 0:
+        return
+    try:
+        from scout.analysis import catch_up_letters
+        written = catch_up_letters(limit)
+        with _lock:
+            _state.last_prepared = written
+        if written:
+            log.info("написано писем: %s", written)
+    except Exception:
+        log.exception("Подготовка писем прервана")
+
+
+def _ensure_session() -> None:
+    """Проверить сессию hh и позвать человека, если она слетела.
+
+    Сессия живёт несколько часов и умирает молча. Раньше это замечалось только
+    по пустым результатам: 23.10 сессия слетела между прогонами, и разведка
+    форм три цикла подряд записывала мусор вместо отказа.
+    """
+    with _lock:
+        if not _state.running or _state.busy:
+            return
+    if store.get_setting("auto_apply", "0") != "1":
+        return
+    try:
+        from scout import collector, hh_login, telegram_worker
+        if collector.is_authorized():
+            return
+        send_photo, send_message = telegram_worker.channel()
+        if send_photo is None:
+            log.warning("сессия hh слетела, Telegram не настроен - вход невозможен")
+            return
+        log.info("сессия hh слетела, зову человека в Telegram")
+        hh_login.login(send_photo, send_message)
+    except Exception:
+        log.exception("Проверка сессии hh прервана")
+
+
+def _forms_after_letters() -> None:
+    """Разведать форму отклика у кандидатов.
+
+    Ворота отправки требуют формы не старше 72 часов, поэтому шаг идёт каждый
+    круг. Без него круг откликов всегда упирается в «Форма отклика не
+    проверена».
+    """
+    with _lock:
+        if not _state.running or _state.busy:
+            return
+    if store.get_setting("auto_apply", "0") != "1":
+        return
+    try:
+        from scout.analysis import peek_forms
+        from scout.application_plan import SENDABLE_OPINIONS
+        cards = [f for f in store.list_finds("analyzed")
+                 if (f.get("opinion") or "") in SENDABLE_OPINIONS]
+        checked = peek_forms(cards, limit=12)
+        with _lock:
+            _state.last_forms = checked
+        if checked:
+            log.info("разведано форм: %s", checked)
+    except Exception:
+        log.exception("Разведка форм прервана")
+
+
+def _apply_after_scan() -> None:
+    """Автоматический круг откликов.
+
+    Живая отправка включается настройкой `live_apply`; без неё круг идёт
+    вхолостую и только пишет в журнал, что ушло бы. Ошибка здесь не должна
+    останавливать сбор.
+    """
+    with _lock:
+        if not _state.running or _state.busy or _state.preparing:
+            return
+    if store.get_setting("auto_apply", "0") != "1":
+        return
+    try:
+        from scout import apply, telegram_worker
+        send_photo, send_message = telegram_worker.channel()
+        with _lock:
+            _state.busy = True
+            _state.stage = "отклики"
+        try:
+            result = apply.auto_round(send_photo, send_message,
+                                      dry_run=not apply.live_allowed())
+        finally:
+            with _lock:
+                _state.busy = False
+                _state.stage = ""
+        with _lock:
+            _state.last_applied = result.get("sent", 0)
+            _state.last_apply_ready = result.get("ready", 0)
+        log.info("круг откликов: %s", {k: v for k, v in result.items() if k != "results"})
+        if result.get("sent") and send_message:
+            send_message(f"Отправлено откликов: {result['sent']}. "
+                         f"Осталось на сегодня: {result.get('left_today')}.")
+    except Exception:
+        log.exception("Круг откликов прерван")
+
+
+def _learn_after_apply() -> None:
+    """Прочитать исходы отправленных откликов и записать их в журнал.
+
+    Отклик живёт неделями: приглашение приходит через день, отказ через две.
+    Поэтому исходы читаются каждый круг, а не один раз после отправки.
+    """
+    with _lock:
+        if not _state.running or _state.busy:
+            return
+    if not store.sent_applications():
+        return
+    try:
+        from scout import learning
+        counts = learning.collect()
+        if counts.get("updated"):
+            log.info("исходы откликов: %s", counts)
+    except Exception:
+        log.exception("Чтение исходов откликов прервано")
 
 
 def start() -> dict:
